@@ -755,10 +755,7 @@ async function rotateWindowsWithBackup(absPath: string, before: BigIntStats, inp
   const revision = await fs.mkdtemp(path.join(backupRoot, 'rotation-'));
   const snapshot = path.join(revision, path.basename(absPath));
   const candidate = path.join(revision, '.candidate');
-  const pixels = path.join(revision, '.pixels');
-  const cloneDir = await fs.mkdtemp(path.join(revision, '.clone-'));
   const finalDir = await fs.mkdtemp(path.join(revision, '.displaced-'));
-  const clone = path.join(cloneDir, 'original');
   const displaced = path.join(finalDir, 'original');
   try {
     await copyWindowsFileWithMetadata(absPath, snapshot);
@@ -774,19 +771,26 @@ async function rotateWindowsWithBackup(absPath: string, before: BigIntStats, inp
       await saved.sync();
     } finally { await saved.close(); }
 
-    // Merge metadata into a fresh pixel file by replacing only a disposable
-    // clone. Any unsupported EA/stream behavior is detected before the live
-    // original is touched.
+    // ReplaceFileW does not carry over all extended attributes. Rewrite only
+    // the unnamed data stream in a disposable copy that already has the metadata.
     await copyWindowsFileWithMetadata(absPath, candidate);
     const cloneStat = await fs.lstat(candidate, { bigint: true });
     if (!cloneStat.isFile() || cloneStat.nlink !== 1n ||
         (cloneStat.dev === before.dev && cloneStat.ino === before.ino)) throw new Error('旋转副本身份不安全');
     await preserveFileMetadata(absPath, candidate, before, cloneStat);
-    const output = await fs.open(pixels, 'wx');
-    try { await output.writeFile(outBuf); await output.sync(); } finally { await output.close(); }
-    await atomicFileOps.replaceWindowsFile(pixels, candidate, clone);
+    const output = await fs.open(candidate, 'r+');
+    try {
+      const opened = await output.stat({ bigint: true });
+      if (opened.dev !== cloneStat.dev || opened.ino !== cloneStat.ino || opened.nlink !== 1n ||
+          opened.size !== cloneStat.size || opened.mtimeNs !== cloneStat.mtimeNs ||
+          opened.ctimeNs !== cloneStat.ctimeNs) throw new Error('旋转副本在写入前已变化');
+      await output.writeFile(outBuf);
+      await output.truncate(outBuf.length);
+      await output.sync();
+    } finally { await output.close(); }
     const ready = await fs.lstat(candidate, { bigint: true });
-    if (!ready.isFile() || !outBuf.equals(await fs.readFile(candidate))) throw new Error('旋转副本内容已变化');
+    if (!ready.isFile() || ready.dev !== cloneStat.dev || ready.ino !== cloneStat.ino ||
+        ready.nlink !== 1n || !outBuf.equals(await fs.readFile(candidate))) throw new Error('旋转副本内容已变化');
     await preserveFileMetadata(absPath, candidate, before, ready);
     const now = await fs.lstat(absPath, { bigint: true });
     if (!now.isFile() || now.dev !== before.dev || now.ino !== before.ino ||
