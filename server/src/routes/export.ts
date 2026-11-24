@@ -5,7 +5,7 @@ import path from 'node:path';
 import { appendZipFile, ZipEntryNames } from '../media/zipEntries.js';
 import type { FastifyInstance } from 'fastify';
 import type { DatabaseSync } from 'node:sqlite';
-import archiver from 'archiver';
+import { ZipArchive } from 'archiver';
 import type { AppConfig } from '../config.js';
 import { toNumber } from '../db/connection.js';
 import {
@@ -358,7 +358,7 @@ export function registerExportRoutes(
         'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(safeZip)}`,
       });
 
-      const archive = archiver('zip', { store: true });
+      const archive = new ZipArchive({ store: true });
       let clientAborted = false;
       const onDisconnect = () => {
         if (!reply.raw.writableEnded) {

@@ -229,7 +229,7 @@ function writeAtomic(filePath, content, mode = 0o644) {
 export function setAutostartEnabled(enabled, options = {}) {
   const platform = options.platform ?? process.platform;
   const homeDir = options.homeDir ?? os.homedir();
-  const targetPath = getAutostartPath({ platform, homeDir });
+  const targetPath = getAutostartPath(options);
 
   if (!targetPath) {
     return { supported: false, enabled: false, path: null };

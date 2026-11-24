@@ -6,12 +6,12 @@ import path from 'node:path';
 import { finished } from 'node:stream/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
-import archiver from 'archiver';
+import { ZipArchive } from 'archiver';
 import { extractZipEntryToFile } from '../src/routes/backup.js';
 
 async function makeZip(zip: string, entries: Array<{ name: string; data: Buffer }>, store: boolean) {
   const out = createWriteStream(zip);
-  const archive = archiver('zip', { store });
+  const archive = new ZipArchive({ store });
   archive.pipe(out);
   for (const entry of entries) archive.append(entry.data, { name: entry.name });
   await archive.finalize();

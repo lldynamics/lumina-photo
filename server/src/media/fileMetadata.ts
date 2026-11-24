@@ -99,8 +99,13 @@ public static class LuminaMetadata {
       while (true) {
         string name = data.Name;
         if (name != "::$DATA" && name != ":$DATA") {
-          using (var stream = File.Open(file + name, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
-          using (var sha = SHA256.Create()) result.Add(name, Convert.ToBase64String(sha.ComputeHash(stream)));
+          // Windows PowerShell's .NET Framework path parser rejects named streams.
+          using (var streamHandle = CreateFileW(file + name, 0x80000000, 7,
+              IntPtr.Zero, 3, 0x02200000, IntPtr.Zero)) {
+            if (streamHandle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
+            using (var stream = new FileStream(streamHandle, FileAccess.Read))
+            using (var sha = SHA256.Create()) result.Add(name, Convert.ToBase64String(sha.ComputeHash(stream)));
+          }
         }
         if (!FindNextStreamW(handle, out data)) {
           int error = Marshal.GetLastWin32Error();
@@ -183,6 +188,7 @@ function Verify-Pair([string] $source, [string] $destination) {
   }
 }
 if ($env:LUMINA_VERIFY_TREE -eq '1') {
+  [Console]::InputEncoding = [System.Text.Encoding]::UTF8
   $pairs = [Console]::In.ReadToEnd() | ConvertFrom-Json
   foreach ($pair in $pairs) { Verify-Pair $pair.source $pair.destination }
 } else {

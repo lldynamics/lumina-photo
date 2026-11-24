@@ -4,7 +4,7 @@ import fsPromises from 'node:fs/promises';
 import path from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { DatabaseSync } from 'node:sqlite';
-import archiver from 'archiver';
+import { ZipArchive } from 'archiver';
 import QRCode from 'qrcode';
 import type { AppConfig } from '../config.js';
 import { toNumber, withTransaction } from '../db/connection.js';
@@ -829,7 +829,7 @@ export function registerShareRoutes(
         'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(safeName)}`,
       });
 
-      const archive = archiver('zip', { store: true });
+      const archive = new ZipArchive({ store: true });
       archive.on('error', (error) => reply.raw.destroy(error));
       archive.pipe(reply.raw);
       const cancellation = new AbortController();

@@ -4,11 +4,19 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number);
-if (nodeMajor < 22 || (nodeMajor === 22 && nodeMinor < 13) || (nodeMajor === 23 && nodeMinor < 5)) {
-  throw new Error('Lumina Photo 需要 Node.js 22.13+、23.5+ 或 24+。');
+const runtimeRequirement = 'Lumina Photo 需要内置 SQLite 支持 FTS5 的 Node.js，请安装 Node.js 22.16+ 或 24+。';
+const { DatabaseSync } = await import('node:sqlite').catch((cause) => {
+  throw new Error(runtimeRequirement, { cause });
+});
+const runtimeProbe = new DatabaseSync(':memory:');
+try {
+  runtimeProbe.exec('CREATE VIRTUAL TABLE runtime_probe USING fts5(content)');
+} catch (cause) {
+  throw new Error(runtimeRequirement, { cause });
+} finally {
+  runtimeProbe.close();
 }
-const { DatabaseSync } = await import('node:sqlite');
+if (process.argv.includes('--check-runtime')) process.exit(0);
 
 process.chdir(fileURLToPath(new URL('../', import.meta.url)));
 const stampName = '.lumina-build.json';

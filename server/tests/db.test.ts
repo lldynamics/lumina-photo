@@ -15,6 +15,16 @@ import {
 import { initSchema } from '../src/db/schema.js';
 import type { DatabaseSync } from 'node:sqlite';
 
+function benchmarkQuery<T>(query: () => T) {
+  const samples = Array.from({ length: 3 }, () => {
+    const started = performance.now();
+    const result = query();
+    return { result, elapsedMs: performance.now() - started };
+  });
+  samples.sort((a, b) => a.elapsedMs - b.elapsedMs);
+  return samples[1];
+}
+
 describe('SQLite 100k Scale Benchmark & Organization Queries', () => {
   let tmpDir: string;
   let db: DatabaseSync;
@@ -110,10 +120,8 @@ describe('SQLite 100k Scale Benchmark & Organization Queries', () => {
   });
 
   it('queries 100,000 timeline buckets in under 50ms', () => {
-    const t0 = performance.now();
-    const res = getTimelineBuckets(db, {});
-    const elapsedMs = performance.now() - t0;
-    console.log(`  [benchmark] getTimelineBuckets(100k rows): ${elapsedMs.toFixed(2)} ms`);
+    const { result: res, elapsedMs } = benchmarkQuery(() => getTimelineBuckets(db, {}));
+    console.log(`  [benchmark] getTimelineBuckets(100k rows) median: ${elapsedMs.toFixed(2)} ms`);
 
     assert.equal(res.totalCount, 100_000);
     assert.equal(res.buckets.length, 120);
@@ -121,10 +129,8 @@ describe('SQLite 100k Scale Benchmark & Organization Queries', () => {
   });
 
   it('queries a single month bucket (~833 rows) from 100k rows in under 30ms', () => {
-    const t0 = performance.now();
-    const items = getBucketMedia(db, '2025-06', {});
-    const elapsedMs = performance.now() - t0;
-    console.log(`  [benchmark] getBucketMedia('2025-06', ${items.length} rows): ${elapsedMs.toFixed(2)} ms`);
+    const { result: items, elapsedMs } = benchmarkQuery(() => getBucketMedia(db, '2025-06', {}));
+    console.log(`  [benchmark] getBucketMedia('2025-06', ${items.length} rows) median: ${elapsedMs.toFixed(2)} ms`);
 
     assert.ok(items.length > 800);
     assert.ok(elapsedMs < 30, `Expected < 30ms, got ${elapsedMs.toFixed(2)}ms`);

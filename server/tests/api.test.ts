@@ -144,8 +144,9 @@ describe('HTTP API, Range Video, LAN Shares & OS Trash Purge Safety', () => {
     assert.equal(addLibRes.statusCode, 201);
     const libId = addLibRes.json().library.id as number;
 
-    // Wait for background scan triggered by POST /api/libraries
-    for (let i = 0; i < 60; i++) {
+    // Wait for the initial scan, including ExifTool startup on hosted runners.
+    const scanDeadline = Date.now() + 60_000;
+    while (Date.now() < scanDeadline) {
       const sysRes = await app.inject({ method: 'GET', url: '/api/system/info' });
       const info = sysRes.json();
       if (info.scan.status === 'idle' && info.stats.totalMedia === 4) break;
@@ -158,7 +159,7 @@ describe('HTTP API, Range Video, LAN Shares & OS Trash Purge Safety', () => {
     });
     assert.equal(bucketsRes.statusCode, 200);
     const bucketsBody = bucketsRes.json();
-    assert.equal(bucketsBody.totalCount, 4);
+    assert.equal(bucketsBody.totalCount, 4, JSON.stringify(scanner.getState()));
 
     const bucketKey = bucketsBody.buckets[0].bucket as string;
     const bucketRes = await app.inject({

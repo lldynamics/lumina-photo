@@ -6,7 +6,7 @@ import path from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import zlib from 'node:zlib';
-import archiver from 'archiver';
+import { ZipArchive } from 'archiver';
 import type { FastifyInstance } from 'fastify';
 import type { DatabaseSync } from 'node:sqlite';
 import type { AppConfig } from '../config.js';
@@ -439,7 +439,7 @@ export async function createBackupArchive(
     try {
       await new Promise<void>((resolve, reject) => {
         const output = fs.createWriteStream(zipTmpPath, { flags: 'wx', mode: 0o600 });
-        const archive = archiver('zip', { zlib: { level: 6 } });
+        const archive = new ZipArchive({ zlib: { level: 6 } });
         let failure: unknown;
         const fail = (error: unknown) => {
           failure ??= error;

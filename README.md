@@ -37,7 +37,7 @@
 ## 快速启动
 
 ### 环境要求
-- **Node.js 22.13+、23.5+ 或 24+**（使用 Node 内置 `node:sqlite`，无需安装 Docker 或外部数据库服务）。
+- **Node.js 22.16+ 或 24+**（推荐 24 LTS）。使用 Node 内置 `node:sqlite` 的 FTS5 全文搜索，无需安装 Docker 或外部数据库服务。
 - Linux 还需要带 `ctypes` 的 Python 3，以调用内核的原子文件操作。
 
 ### 方式一：macOS 桌面应用双击启动（推荐，无终端窗口 + 右上角菜单栏图标）

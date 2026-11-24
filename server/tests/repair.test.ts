@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import { finished } from 'node:stream/promises';
-import archiver from 'archiver';
+import { ZipArchive } from 'archiver';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -282,7 +282,7 @@ describe('Originals, curation, shares and paging', () => {
     legacy.close();
     const out = createWriteStream(path.join(root, 'data', 'backups', 'legacy.zip'));
     const done = finished(out);
-    const zip = archiver('zip');
+    const zip = new ZipArchive();
     zip.pipe(out);
     zip.file(source, { name: 'lumina.db' });
     await zip.finalize();

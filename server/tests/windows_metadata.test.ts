@@ -97,8 +97,9 @@ test('Windows copies, rotation and cross-volume directories preserve EAs and str
   await assert.rejects(preserveFileMetadata(moved, reference), /Windows 文件属性/);
 
   const folder = path.join(root, 'folder'), folderTarget = path.join(root, 'folder-target');
+  const member = '文件[猫].txt';
   await fs.mkdir(folder);
-  await fs.writeFile(path.join(folder, 'keep.txt'), 'original folder data');
+  await fs.writeFile(path.join(folder, member), 'original folder data');
   setWindowsEa(folder, Buffer.from('directory EA'));
   await fs.writeFile(folder + ':lumina-directory-stream', Buffer.from('directory stream'));
   const rename = atomicFileOps.renameNoReplace;
@@ -109,7 +110,7 @@ test('Windows copies, rotation and cross-volume directories preserve EAs and str
   let recorded = false;
   await moveDirectoryAndRecord(folder, folderTarget, () => { recorded = true; });
   assert.equal(recorded, true);
-  assert.equal(await fs.readFile(path.join(folderTarget, 'keep.txt'), 'utf8'), 'original folder data');
+  assert.equal(await fs.readFile(path.join(folderTarget, member), 'utf8'), 'original folder data');
   assert.equal(await fs.readFile(folderTarget + ':lumina-directory-stream', 'utf8'), 'directory stream');
   const archive = (await fs.readdir(root)).find(name => name.startsWith('.lumina-retained-folder-'))!;
   await verifyWindowsMetadata(path.join(root, archive, 'original'), folderTarget);

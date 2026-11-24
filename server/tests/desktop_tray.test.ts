@@ -14,6 +14,7 @@ import {
   desktopExecEscape,
   getAutostartPath,
   isAutostartEnabled,
+  LINUX_AUTOSTART_NAME,
   MACOS_LAUNCH_LABEL,
   setAutostartEnabled,
   xmlEscape,
@@ -184,8 +185,15 @@ describe('Desktop Tray, App Launcher & Launch-at-Login', () => {
     assert.match(launcher, /--open-on-ready --daemon-log/);
   });
 
-  it('supervises server over --managed-by-tray JSON-Lines IPC (start, autostart toggle, restart, single-instance, quit)', async () => {
+  it('supervises server over --managed-by-tray JSON-Lines IPC (start, autostart toggle, restart, single-instance, quit)', {
+    skip: process.platform !== 'darwin' && process.platform !== 'linux',
+  }, async () => {
     const dataDir = path.join(tmpRoot, 'ipc-data');
+    const configDir = path.join(tmpRoot, 'ipc-config');
+    const autostartPath = process.platform === 'linux'
+      ? path.join(configDir, 'autostart', LINUX_AUTOSTART_NAME)
+      : getAutostartPath({ homeDir: tempHome });
+    assert.ok(autostartPath);
     const port = await getFreePort();
 
     const child = spawn(
@@ -197,10 +205,11 @@ describe('Desktop Tray, App Launcher & Launch-at-Login', () => {
         env: {
           ...process.env,
           HOME: tempHome,
+          XDG_CONFIG_HOME: configDir,
           LUMINA_DATA_DIR: dataDir,
           PORT: String(port),
           HOST: '127.0.0.1',
-          NODE_ENV: 'production',
+          NODE_ENV: 'test',
         },
       },
     );
@@ -230,13 +239,13 @@ describe('Desktop Tray, App Launcher & Launch-at-Login', () => {
     const infoJson1 = (await infoRes1.json()) as { dataDir: string };
     assert.equal(infoJson1.dataDir, dataDir);
 
-    // Toggle autostart ON & OFF inside isolated tempHome (with NODE_ENV=test so launchctl is skipped)
+    // Toggle the autostart file in the isolated configuration directory.
     child.stdin!.write(`${JSON.stringify({ action: 'toggleAutostart' })}\n`);
     const autoOnMsg = await waitFor(() =>
       messages.find((m) => m.autostart === true),
     );
     assert.equal(autoOnMsg.autostart, true);
-    assert.equal(isAutostartEnabled({ homeDir: tempHome }), true);
+    assert.equal(fs.existsSync(autostartPath), true);
 
     child.stdin!.write(`${JSON.stringify({ action: 'toggleAutostart' })}\n`);
     const autoOffMsg = await waitFor(() => {
@@ -246,7 +255,7 @@ describe('Desktop Tray, App Launcher & Launch-at-Login', () => {
         : null;
     });
     assert.equal(autoOffMsg.autostart, false);
-    assert.equal(isAutostartEnabled({ homeDir: tempHome }), false);
+    assert.equal(fs.existsSync(autostartPath), false);
 
     // Single-instance check: second supervisor for same dataDir + port emits alreadyRunning and exits 0
     const dupMessages: Array<Record<string, unknown>> = [];
