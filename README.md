@@ -171,3 +171,7 @@ npm run start:headless # 以纯命令行无托盘模式启动
 | `LUMINA_NO_TRAY` | 空 | 设为 `1` 时禁用右上角菜单栏 / Linux 系统托盘图标 |
 | `LUMINA_OPEN_ON_READY` | 空 | 设为 `1` 时服务就绪后自动在默认浏览器打开页面 |
 | `FFMPEG_PATH` / `FFPROBE_PATH` | 内置静态二进制 | 可选覆盖指定系统自定义 `ffmpeg` / `ffprobe` 路径 |
+
+## 许可证
+
+本仓库的原创内容采用 [MIT 许可证](LICENSE)。第三方依赖、AI 模型和在线地图瓦片遵循各自的许可证及署名要求。导入的照片和视频适用原有授权。
