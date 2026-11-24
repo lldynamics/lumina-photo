@@ -6,9 +6,14 @@ tmp/
 *.db
 *.db-wal
 *.db-shm
+*.db-journal
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
 *.tsbuildinfo
 *.traineddata
-.env
+*.env
 .env.*
 .DS_Store
 *.log
@@ -20,3 +25,23 @@ coverage/
 自己用的一个相册.app.previous/
 自己用的一个相册.desktop
 desktop/assets/*.png
+
+# Local TLS certificates and keys
+*.crt
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Backups and media recovery files
+lumina-backup-*.zip
+pre-restore-*.zip
+.lumina-originals/
+.lumina-detached/
+.lumina-retained-original-*
+.lumina-retained-folder-*
+.lumina-transfer-recovery-*
+.lumina-folder-recovery-*
+.lumina-move-*
+.lumina-copy-*
+.lumina-rot-*

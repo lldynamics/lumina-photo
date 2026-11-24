@@ -2,6 +2,17 @@
 
 All notable changes to **Lumina Photo · 光影本地相册** will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- Native macOS menu bar and Linux tray launchers with launch-at-login controls.
+- Folder passcodes and an option to exclude folders from global albums and search.
+
+### Changed
+- Remote access requires HTTPS by default. Plain HTTP stays available on loopback, with explicit opt-in for other interfaces.
+- Windows photo rotation and cross-volume moves verify extended attributes and alternate data streams before accepting the result.
+- The Node.js runtime must provide SQLite FTS5. The minimum supported 22.x release is 22.16.0.
+
 ## [1.2.0] - 2026-11-23
 
 ### Security
