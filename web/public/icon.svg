@@ -1,0 +1,210 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- Deep twilight-to-indigo squircle backdrop -->
+    <linearGradient id="bgBase" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#131b32" />
+      <stop offset="52%" stop-color="#253466" />
+      <stop offset="100%" stop-color="#4d3273" />
+    </linearGradient>
+
+    <!-- Warm golden-coral sunset ambient glow -->
+    <radialGradient id="bgGlow" cx="84%" cy="84%" r="68%">
+      <stop offset="0%" stop-color="#fb923c" stop-opacity="0.64" />
+      <stop offset="46%" stop-color="#f43f5e" stop-opacity="0.26" />
+      <stop offset="100%" stop-color="#4d3273" stop-opacity="0" />
+    </radialGradient>
+
+    <!-- Subtle top-left cool skylight -->
+    <radialGradient id="bgTopLight" cx="16%" cy="14%" r="54%">
+      <stop offset="0%" stop-color="#60a5fa" stop-opacity="0.28" />
+      <stop offset="100%" stop-color="#131b32" stop-opacity="0" />
+    </radialGradient>
+
+    <!-- Back card frosted keepsake paper -->
+    <linearGradient id="backCard" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.32" />
+      <stop offset="100%" stop-color="#cbd5e1" stop-opacity="0.14" />
+    </linearGradient>
+
+    <!-- Front Polaroid / archival print card -->
+    <linearGradient id="frontCard" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" />
+      <stop offset="100%" stop-color="#f1f5f9" />
+    </linearGradient>
+
+    <!-- Golden-hour sky inside photo -->
+    <linearGradient id="photoSky" x1="12%" y1="0%" x2="88%" y2="100%">
+      <stop offset="0%" stop-color="#2b2878" />
+      <stop offset="42%" stop-color="#7c3aed" />
+      <stop offset="76%" stop-color="#f97316" />
+      <stop offset="100%" stop-color="#fde68a" />
+    </linearGradient>
+
+    <!-- Soft warm horizon haze -->
+    <linearGradient id="horizonGlow" x1="50%" y1="0%" x2="50%" y2="100%">
+      <stop offset="0%" stop-color="#fde68a" stop-opacity="0" />
+      <stop offset="100%" stop-color="#fde68a" stop-opacity="0.38" />
+    </linearGradient>
+
+    <!-- Warm glowing sun -->
+    <radialGradient id="sunOrb" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#fffbeb" />
+      <stop offset="58%" stop-color="#fde047" />
+      <stop offset="100%" stop-color="#fb923c" />
+    </radialGradient>
+
+    <!-- Sun soft halo -->
+    <radialGradient id="sunHalo" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#fef08a" stop-opacity="0.72" />
+      <stop offset="100%" stop-color="#fb923c" stop-opacity="0" />
+    </radialGradient>
+
+    <!-- Sunlit mountain highlight -->
+    <linearGradient id="peakRim" x1="100%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#fb923c" stop-opacity="0.52" />
+      <stop offset="100%" stop-color="#312e81" stop-opacity="0" />
+    </linearGradient>
+
+    <!-- Gold privacy badge gradient -->
+    <linearGradient id="lockBadge" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fcd34d" />
+      <stop offset="45%" stop-color="#f59e0b" />
+      <stop offset="100%" stop-color="#ea580c" />
+    </linearGradient>
+
+    <!-- Subtle top sheen on privacy badge -->
+    <radialGradient id="badgeSheen" cx="34%" cy="22%" r="58%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.34" />
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0" />
+    </radialGradient>
+
+    <!-- Soft drop shadow for layered cards -->
+    <filter id="cardShadow" x="-18%" y="-18%" width="140%" height="144%">
+      <feDropShadow dx="0" dy="14" stdDeviation="16" flood-color="#080c18" flood-opacity="0.44" />
+    </filter>
+
+    <filter id="badgeShadow" x="-25%" y="-25%" width="150%" height="155%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#080c18" flood-opacity="0.40" />
+    </filter>
+
+    <!-- Rounded clip for inner photo frame -->
+    <clipPath id="innerPhotoClip">
+      <rect x="136" y="122" width="236" height="206" rx="22" />
+    </clipPath>
+  </defs>
+
+  <!-- Squircle backdrop -->
+  <rect x="0" y="0" width="512" height="512" rx="116" fill="url(#bgBase)" />
+  <rect x="0" y="0" width="512" height="512" rx="116" fill="url(#bgGlow)" />
+  <rect x="0" y="0" width="512" height="512" rx="116" fill="url(#bgTopLight)" />
+  <rect
+    x="4.5"
+    y="4.5"
+    width="503"
+    height="503"
+    rx="111.5"
+    fill="none"
+    stroke="#ffffff"
+    stroke-opacity="0.14"
+    stroke-width="2.5"
+  />
+
+  <!-- Back tilted keepsake card -->
+  <g transform="rotate(-11 236 248)" filter="url(#cardShadow)">
+    <rect
+      x="96"
+      y="96"
+      width="268"
+      height="296"
+      rx="34"
+      fill="url(#backCard)"
+      stroke="#ffffff"
+      stroke-opacity="0.38"
+      stroke-width="2.5"
+    />
+    <rect
+      x="118"
+      y="118"
+      width="224"
+      height="198"
+      rx="20"
+      fill="#ffffff"
+      fill-opacity="0.11"
+    />
+  </g>
+
+  <!-- Front archival photo card -->
+  <g transform="rotate(4 252 248)" filter="url(#cardShadow)">
+    <rect
+      x="115"
+      y="100"
+      width="278"
+      height="306"
+      rx="36"
+      fill="url(#frontCard)"
+    />
+
+    <!-- Inner golden-hour landscape photo -->
+    <g clip-path="url(#innerPhotoClip)">
+      <rect x="136" y="122" width="236" height="206" fill="url(#photoSky)" />
+      <rect x="136" y="210" width="236" height="118" fill="url(#horizonGlow)" />
+
+      <!-- Tiny twilight stars in upper-left sky -->
+      <circle cx="170" cy="154" r="2.2" fill="#ffffff" fill-opacity="0.65" />
+      <circle cx="204" cy="142" r="1.6" fill="#fde68a" fill-opacity="0.55" />
+      <circle cx="186" cy="176" r="1.4" fill="#ffffff" fill-opacity="0.45" />
+
+      <!-- Sun halo & sun -->
+      <circle cx="298" cy="192" r="62" fill="url(#sunHalo)" />
+      <circle cx="298" cy="192" r="25" fill="url(#sunOrb)" />
+
+      <!-- Far mountain range -->
+      <path
+        d="M 128 272 L 198 212 Q 208 204 218 213 L 262 252 L 304 224 Q 314 217 324 226 L 384 278 L 384 334 L 128 334 Z"
+        fill="#312e81"
+        fill-opacity="0.58"
+      />
+
+      <!-- Foreground mountain silhouette -->
+      <path
+        d="M 128 296 L 188 238 Q 200 226 212 238 L 254 278 L 296 244 Q 308 234 320 245 L 384 304 L 384 336 L 128 336 Z"
+        fill="#161d38"
+      />
+
+      <!-- Warm sunlit slope on main ridge -->
+      <path
+        d="M 200 232 Q 206 232 212 238 L 254 278 L 236 286 L 200 232 Z"
+        fill="url(#peakRim)"
+      />
+
+      <!-- Calm twilight lake reflection -->
+      <rect x="136" y="295" width="236" height="36" fill="#0d1428" fill-opacity="0.52" />
+      <rect x="266" y="303" width="66" height="4.5" rx="2.25" fill="#fde68a" fill-opacity="0.65" />
+      <rect x="278" y="313" width="42" height="3.5" rx="1.75" fill="#fb923c" fill-opacity="0.52" />
+      <rect x="288" y="321" width="22" height="2.8" rx="1.4" fill="#f97316" fill-opacity="0.38" />
+    </g>
+
+    <!-- Subtle archival bottom margin lines (personal album caption feel) -->
+    <rect x="145" y="348" width="102" height="11.5" rx="5.75" fill="#cbd5e1" />
+    <rect x="145" y="369" width="62" height="8.5" rx="4.25" fill="#e2e8f0" />
+  </g>
+
+  <!-- Warm-gold private lock badge at lower-right -->
+  <g filter="url(#badgeShadow)">
+    <circle cx="378" cy="378" r="56" fill="url(#lockBadge)" stroke="#ffffff" stroke-width="6.5" />
+    <circle cx="378" cy="378" r="52.5" fill="url(#badgeSheen)" />
+    <!-- Lock shackle -->
+    <path
+      d="M 361 374 V 362 C 361 352.2 368.6 344.5 378 344.5 C 387.4 344.5 395 352.2 395 362 V 374"
+      fill="none"
+      stroke="#ffffff"
+      stroke-width="8"
+      stroke-linecap="round"
+    />
+    <!-- Lock body -->
+    <rect x="352" y="372" width="52" height="39" rx="10.5" fill="#ffffff" />
+    <!-- Keyhole -->
+    <circle cx="378" cy="388.5" r="5" fill="#ea580c" />
+    <rect x="375.3" y="390.5" width="5.4" height="9.5" rx="2.7" fill="#ea580c" />
+  </g>
+</svg>

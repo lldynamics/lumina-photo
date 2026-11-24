@@ -1,0 +1,21 @@
+{
+  "name": "lumina-photo",
+  "version": "1.2.0",
+  "private": true,
+  "description": "Lumina Photo — Cross-platform local photo & video album for 100k+ media with LAN sharing and fast organization",
+  "scripts": {
+    "install:all": "npm --prefix server install && npm --prefix web install",
+    "build": "node scripts/build.mjs",
+    "build:desktop": "node scripts/build-desktop.mjs",
+    "desktop:install": "node scripts/install-desktop.mjs",
+    "start": "node scripts/start.mjs",
+    "start:headless": "node scripts/start.mjs --no-tray",
+    "dev:server": "npm --prefix server run dev",
+    "dev:web": "npm --prefix web run dev",
+    "typecheck": "npm --prefix server exec -- tsc -p server/tsconfig.json --noEmit && npm --prefix web exec -- tsc -p web/tsconfig.json --noEmit",
+    "test:server": "npm --prefix server test",
+    "test:web": "npm --prefix server exec -- tsx --test web/tests/*.test.ts",
+    "test": "npm run test:server && npm run test:web",
+    "prestart": "node scripts/build.mjs --if-needed"
+  }
+}
