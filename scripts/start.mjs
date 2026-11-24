@@ -7,6 +7,7 @@ import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { isAutostartEnabled, setAutostartEnabled } from './autostart.mjs';
 import { buildDesktop, MACOS_APP_BUNDLE_NAME } from './build-desktop.mjs';
+import { prepareBundledRuntime } from './bundled-runtime.mjs';
 
 const PROJECT_DIR = path.resolve(
   fileURLToPath(new URL('../', import.meta.url)),
@@ -37,6 +38,7 @@ function parseArgs(argv) {
   let noTray = false;
   let daemonLog = false;
   let appBundlePath = null;
+  let bundledRuntime = false;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -50,6 +52,8 @@ function parseArgs(argv) {
       noTray = true;
     } else if (arg === '--daemon-log') {
       daemonLog = true;
+    } else if (arg === '--bundled-runtime') {
+      bundledRuntime = true;
     } else if (arg === '--app-bundle-path' && i + 1 < argv.length) {
       appBundlePath = argv[++i];
     }
@@ -62,6 +66,7 @@ function parseArgs(argv) {
     noTray,
     daemonLog,
     appBundlePath,
+    bundledRuntime,
   };
 }
 
@@ -300,6 +305,8 @@ async function main() {
   let trayChild = null;
   let serverChild = null;
   let shuttingDown = false;
+  const installController = new AbortController();
+  let runtimePreparation;
   let isRestarting = false;
   let initialOpenDone = false;
   let buildHasRun = false;
@@ -566,15 +573,29 @@ async function main() {
     state.error = null;
     pushState();
 
-    await ensureBuiltIfNeeded();
+    let serverProjectDir = PROJECT_DIR;
+    if (opts.bundledRuntime) {
+      state.status = 'building';
+      pushState();
+      runtimePreparation = prepareBundledRuntime(PROJECT_DIR, dataDir, {
+        signal: installController.signal,
+        onOutput: writeLog,
+      }).finally(() => { runtimePreparation = undefined; });
+      serverProjectDir = await runtimePreparation;
+    } else {
+      await ensureBuiltIfNeeded();
+    }
 
-    if (!fs.existsSync(SERVER_ENTRY)) {
-      throw new Error(`找不到编译后的服务端入口: ${SERVER_ENTRY}`);
+    if (shuttingDown) return;
+
+    const serverEntry = path.join(serverProjectDir, 'server', 'dist', 'index.js');
+    if (!fs.existsSync(serverEntry)) {
+      throw new Error(`找不到编译后的服务端入口: ${serverEntry}`);
     }
 
     let stderrTail = '';
-    const child = fork(SERVER_ENTRY, [], {
-      cwd: PROJECT_DIR,
+    const child = fork(serverEntry, [], {
+      cwd: serverProjectDir,
       stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
       env: process.env,
     });
@@ -669,7 +690,7 @@ async function main() {
   };
 
   const restartServer = async () => {
-    if (shuttingDown || isRestarting) return;
+    if (shuttingDown || isRestarting || runtimePreparation) return;
     isRestarting = true;
     state.status = 'restarting';
     state.error = null;
@@ -689,6 +710,7 @@ async function main() {
     try {
       await startServerProcess();
     } catch (err) {
+      if (shuttingDown) return;
       state.status = 'error';
       state.error = err instanceof Error ? err.message : String(err);
       pushState();
@@ -699,6 +721,10 @@ async function main() {
     if (shuttingDown) return;
     shuttingDown = true;
     writeLog(`[supervisor] shutting down (${reason})...\n`);
+    if (runtimePreparation) {
+      installController.abort();
+      await runtimePreparation.catch(() => {});
+    }
 
     const child = serverChild;
     if (child && child.exitCode === null && child.signalCode === null) {
@@ -755,6 +781,7 @@ async function main() {
   try {
     await startServerProcess();
   } catch (err) {
+    if (shuttingDown) return;
     const msg = err instanceof Error ? err.message : String(err);
     logSupervisor(`启动失败: ${msg}`);
     state.status = 'error';

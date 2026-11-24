@@ -106,7 +106,7 @@ function expectedOutputsExist(projectDir, platform, hasSwiftc) {
   return true;
 }
 
-export function buildInfoPlist(version) {
+export function buildInfoPlist(version, minimumMacOS = '12.0') {
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
@@ -133,7 +133,7 @@ export function buildInfoPlist(version) {
     '  <key>CFBundleVersion</key>',
     `  <string>${xmlEscape(version)}</string>`,
     '  <key>LSMinimumSystemVersion</key>',
-    '  <string>12.0</string>',
+    `  <string>${xmlEscape(minimumMacOS)}</string>`,
     '  <key>LSUIElement</key>',
     '  <true/>',
     '  <key>NSHighResolutionCapable</key>',
@@ -244,6 +244,7 @@ export async function buildDesktop({
   projectDir = DEFAULT_PROJECT_DIR,
   ifNeeded = false,
   force = false,
+  macosDeploymentTarget,
 } = {}) {
   const resolvedProjectDir = path.resolve(projectDir);
   const platform = process.platform;
@@ -296,16 +297,15 @@ export async function buildDesktop({
         fs.mkdirSync(resDir, { recursive: true });
 
         const trayBin = path.join(macosDir, 'LuminaTray');
-        execFileSync(
-          swiftcBin,
-          ['-O', '-framework', 'AppKit', swiftSrc, '-o', trayBin],
-          { stdio: 'inherit' },
-        );
+        const swiftArgs = ['-O', '-framework', 'AppKit', '-file-prefix-map', `${resolvedProjectDir}=.`];
+        if (macosDeploymentTarget) swiftArgs.push('-target', `${process.arch}-apple-macosx${macosDeploymentTarget}`);
+        swiftArgs.push(path.relative(resolvedProjectDir, swiftSrc), '-o', trayBin);
+        execFileSync(swiftcBin, swiftArgs, { cwd: resolvedProjectDir, stdio: 'inherit' });
         fs.chmodSync(trayBin, 0o755);
 
         fs.writeFileSync(
           path.join(stageBundle, 'Contents', 'Info.plist'),
-          buildInfoPlist(version),
+          buildInfoPlist(version, macosDeploymentTarget),
           'utf8',
         );
 

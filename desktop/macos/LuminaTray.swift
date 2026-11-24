@@ -291,7 +291,7 @@ final class LuminaTrayController: NSObject, NSApplicationDelegate {
         button.toolTip = "自己用的一个相册 · 运行中"
       }
     case "building":
-      button.toolTip = "自己用的一个相册 · 正在构建资源..."
+      button.toolTip = "自己用的一个相册 · 正在准备运行环境..."
     case "restarting":
       button.toolTip = "自己用的一个相册 · 正在重启..."
     case "error":
@@ -582,18 +582,22 @@ final class LuminaTrayController: NSObject, NSApplicationDelegate {
   }
 
   private func launchStandaloneSupervisor() {
-    let config = loadBundleConfig()
-    guard let projectDir = resolveProjectDir(config: config) else {
+    let bundledProjectDir = Bundle.main.resourceURL?.appendingPathComponent("app").path
+    let embeddedProject = bundledProjectDir.flatMap { hasStartScript($0) ? $0 : nil }
+    let config = embeddedProject == nil ? loadBundleConfig() : nil
+    guard let projectDir = embeddedProject ?? resolveProjectDir(config: config) else {
       showFatalAlert(
         title: "找不到相册项目目录",
         message: "未能定位包含 scripts/start.mjs 的项目文件夹。请回到项目目录重新运行 npm run desktop:install。"
       )
       return
     }
-    guard let nodePath = resolveNodePath(config: config) else {
+    let bundledNode = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/node").path
+    let runtime = embeddedProject == nil ? resolveNodePath(config: config) : bundledNode
+    guard let nodePath = runtime, FileManager.default.isExecutableFile(atPath: nodePath) else {
       showFatalAlert(
         title: "未找到 Node.js",
-        message: "需要 Node.js 22.13+ 或 24+ 才能运行「自己用的一个相册」。"
+        message: "找不到可用的 Node.js。请重新解压下载包，或为源码版安装 Node.js 22.16+ 或 24+。"
       )
       return
     }
@@ -611,6 +615,9 @@ final class LuminaTrayController: NSObject, NSApplicationDelegate {
       Bundle.main.bundlePath,
     ]
 
+    if embeddedProject != nil {
+      proc.arguments?.append("--bundled-runtime")
+    }
     var env = ProcessInfo.processInfo.environment
     let home = NSHomeDirectory()
     let extraPaths = [

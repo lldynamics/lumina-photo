@@ -44,7 +44,11 @@
 
 ## 快速启动
 
-### 环境要求
+### macOS 下载包
+
+Apple Silicon Mac（macOS 14 或更新版本）可从 [GitHub Releases](https://github.com/lldynamics/lumina-photo/releases) 下载文件名以 `-macos-arm64.zip` 结尾的压缩包，解压后打开「自己用的一个相册.app」。下载包自带 Node.js，首次启动需要联网安装锁定的依赖，之后可离线启动。签名状态及首次打开说明见 Releases 页面。
+
+### 从源码启动的环境要求
 - **Node.js 22.16+ 或 24+**（推荐 24 LTS）。使用 Node 内置 `node:sqlite` 的 FTS5 全文搜索，无需安装 Docker 或外部数据库服务。
 - Linux 还需要带 `ctypes` 的 Python 3，以调用内核的原子文件操作。
 
@@ -128,6 +132,7 @@ npm run install:all    # 安装前后端依赖
 npm run typecheck      # 运行服务端与前端 TypeScript 静态类型检查
 npm run build          # 原子化编译服务端与按需拆包前端静态资源
 npm run build:desktop  # 生成 macOS「自己用的一个相册.app」/ Linux 桌面启动器与图标资源
+npm run package:macos -- /path/to/node-distribution  # 从干净提交生成 Apple Silicon 下载包
 npm run desktop:install # 将桌面应用快捷方式安装到 ~/Applications 或 ~/.local/share/applications
 npm test               # 运行全部服务端与前端自动化测试（typecheck/test/build 已接入 GitHub Actions CI）
 npm run test:server    # 仅运行服务端单元、性能与安全回归测试
