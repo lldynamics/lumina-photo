@@ -33,6 +33,7 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
 using System.Security.Cryptography;
 using Microsoft.Win32.SafeHandles;
 public static class LuminaMetadata {
@@ -77,6 +78,13 @@ public static class LuminaMetadata {
     uint value = GetFileAttributesW(name);
     if (value == 0xFFFFFFFF) throw new Win32Exception(Marshal.GetLastWin32Error());
     return value;
+  }
+  public static string AccessRules(string name) {
+    var part = AccessControlSections.Access;
+    FileSystemSecurity rules = (Attributes(name) & 0x10) != 0
+      ? (FileSystemSecurity)Directory.GetAccessControl(name, part)
+      : File.GetAccessControl(name, part);
+    return rules.GetSecurityDescriptorSddlForm(part);
   }
   public static uint VolumeFlags(SafeFileHandle file) {
     uint serial, maxName, flags;
@@ -169,9 +177,8 @@ function Verify-Pair([string] $source, [string] $destination) {
     throw 'File attributes differ'
   }
   if ($env:LUMINA_VERIFY_TREE -eq '1') {
-    $part = [System.Security.AccessControl.AccessControlSections]::Access
-    $sourceAcl = (Get-Acl -LiteralPath $source -ErrorAction Stop).GetSecurityDescriptorSddlForm($part)
-    $destinationAcl = (Get-Acl -LiteralPath $destination -ErrorAction Stop).GetSecurityDescriptorSddlForm($part)
+    $sourceAcl = [LuminaMetadata]::AccessRules($source)
+    $destinationAcl = [LuminaMetadata]::AccessRules($destination)
     if ($sourceAcl -cne $destinationAcl) { throw 'Access control entries differ' }
   }
   $srcFlags = [LuminaMetadata]::VolumeFlags($src)
