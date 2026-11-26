@@ -187,6 +187,12 @@ export async function buildFolderAlbumTrees(
     JOIN media m ON m.id = fc.cover_media_id
     WHERE fc.library_id = ? AND m.deleted_at IS NULL
   `);
+  const deletedFoldersStmt = db.prepare(`
+    SELECT folder_path FROM deleted_folders WHERE library_id = ?
+  `);
+  const clearDeletedFolderStmt = db.prepare(`
+    DELETE FROM deleted_folders WHERE library_id = ? AND folder_path = ?
+  `);
 
   const trees: LibraryFolderTree[] = [];
 
@@ -207,6 +213,16 @@ export async function buildFolderAlbumTrees(
     const customCoverMap = new Map<string, number>();
     for (const cr of customCoverRows) {
       customCoverMap.set(cr.folder_path, toNumber(cr.cover_media_id));
+    }
+
+    let deletedFolderSet = new Set<string>();
+    try {
+      const delRows = deletedFoldersStmt.all(libraryId) as Array<{
+        folder_path: string;
+      }>;
+      deletedFolderSet = new Set(delRows.map((r) => String(r.folder_path)));
+    } catch {
+      deletedFolderSet = new Set();
     }
 
     const directCountMap = new Map<string, number>();
@@ -343,15 +359,30 @@ export async function buildFolderAlbumTrees(
       node.totalCount = isSealedLock ? 0 : sumActive;
       node.trashedSubtotal = sumTrashed;
 
+      if (sumActive > 0 && deletedFolderSet.has(node.folderPath)) {
+        try {
+          clearDeletedFolderStmt.run(libraryId, node.folderPath);
+        } catch {
+          // ignore if read-only snapshot
+        }
+        deletedFolderSet.delete(node.folderPath);
+      }
+
+      const isExplicitlyDeleted =
+        deletedFolderSet.has(node.folderPath) ||
+        Array.from(deletedFolderSet).some((df) =>
+          node.folderPath.startsWith(`${df}/`),
+        );
+
       // Hide folders whose ONLY contents are soft-deleted items in Recycle Bin (e.g. deleted via trash_contents)
-      // Always keep explicitly locked or excluded folders visible in the tree so user can manage/unlock them.
+      // or folders explicitly marked deleted while awaiting Recycle Bin purge.
+      // Always keep explicitly locked folders visible unless explicitly deleted while unlocked.
       const onlyTrashedRemnants =
         !isSealedLock &&
-        !node.isExcluded &&
         !node.isLocked &&
         sumActive === 0 &&
-        sumTrashed > 0 &&
-        keptChildren.length === 0;
+        keptChildren.length === 0 &&
+        ((!node.isExcluded && sumTrashed > 0) || isExplicitlyDeleted);
       const cleanNode = node as Partial<InternalNode>;
       delete cleanNode.trashedSubtotal;
       return {
@@ -482,12 +513,26 @@ export async function createFolderAlbum(
   const absPath = resolveSafeFolderDir(lib.rootPath, folderPath);
 
   if (fs.existsSync(absPath)) {
+    const pendingDeleted = db
+      .prepare(
+        'SELECT 1 FROM deleted_folders WHERE library_id = ? AND (folder_path = ? OR instr(?, folder_path || \'/\') = 1) LIMIT 1',
+      )
+      .get(libraryId, folderPath, folderPath);
+    if (pendingDeleted) {
+      throw new FolderOperationError(
+        `相册文件夹「${folderPath}」有已删照片仍在回收站中，请先在回收站恢复或清空后再创建同名文件夹`,
+        409,
+      );
+    }
     throw new FolderOperationError(`相册文件夹「${folderPath}」已存在`, 409);
   }
 
   await scanner.withWatchSuppressed([libraryId], async () => {
     await fsPromises.mkdir(absPath, { recursive: true });
   });
+  db.prepare(
+    'DELETE FROM deleted_folders WHERE library_id = ? AND folder_path = ?',
+  ).run(libraryId, folderPath);
   invalidateFolderTreeCache(lib.rootPath);
   return { libraryId, folderPath, absPath };
 }
@@ -579,6 +624,17 @@ async function relocateFolder(
   invalidateFolderTreeCache(to.rootPath);
 }
 
+const LUMINA_INTERNAL_HIDDEN_DIR_PREFIXES = [
+  '.lumina-retained-original-',
+  '.lumina-retained-folder-',
+  '.lumina-transfer-recovery-',
+];
+
+function isLuminaInternalHiddenDir(name: string): boolean {
+  if (name === '.lumina-originals') return true;
+  return LUMINA_INTERNAL_HIDDEN_DIR_PREFIXES.some((p) => name.startsWith(p));
+}
+
 async function hasAnyRealFiles(dirPath: string): Promise<boolean> {
   const entries = await fsPromises
     .readdir(dirPath, { withFileTypes: true });
@@ -591,6 +647,7 @@ async function hasAnyRealFiles(dirPath: string): Promise<boolean> {
       if (await isAppleDoubleFile(full)) continue;
     }
     if (e.isDirectory()) {
+      if (isLuminaInternalHiddenDir(e.name)) continue;
       if (await hasAnyRealFiles(full)) return true;
     } else {
       return true;
@@ -612,7 +669,6 @@ export async function deleteFolderAlbum(
     throw new FolderOperationError('不能删除图库根目录', 400);
   }
 
-
   const active = db.prepare(`SELECT id FROM media WHERE deleted_at IS NULL AND library_id = ?
     AND (folder_path = ? OR instr(folder_path, ?) = 1)`).all(libraryId, folderPath, folderPath + '/');
   const activeCount = active.length;
@@ -624,12 +680,14 @@ export async function deleteFolderAlbum(
     );
   }
 
-  const trashedMediaCount = await trashMedia(db, active.map(row => toNumber(row.id)), new Date().toISOString());
+  const nowIso = new Date().toISOString();
+  const trashedMediaCount = await trashMedia(db, active.map(row => toNumber(row.id)), nowIso);
   const absDir = resolveSafeFolderDir(lib.rootPath, folderPath);
   let removedDir = false;
+  let stillHasFiles = false;
   await scanner.withWatchSuppressed([libraryId], async () => {
     if (fs.existsSync(absDir)) {
-      const stillHasFiles = await hasAnyRealFiles(absDir);
+      stillHasFiles = await hasAnyRealFiles(absDir);
       if (!stillHasFiles) {
         const res = await moveFilesToOsTrash([absDir], [lib.rootPath], async () => {
           if (!rootAvailable(lib.rootPath, lib.rootIdentity) || await hasAnyRealFiles(absDir)) {
@@ -639,16 +697,256 @@ export async function deleteFolderAlbum(
         if (res.errors.length) throw new FolderOperationError(res.errors.join('\n'), 500);
         removedDir = !fs.existsSync(absDir);
       }
+    } else {
+      removedDir = true;
     }
   });
+
   if (removedDir) {
     db.prepare(
       `DELETE FROM folder_privacy WHERE library_id = ? AND (folder_path = ? OR instr(folder_path, ?) = 1)`,
+    ).run(libraryId, folderPath, `${folderPath}/`);
+    db.prepare(
+      `DELETE FROM folder_covers WHERE library_id = ? AND (folder_path = ? OR instr(folder_path, ?) = 1)`,
+    ).run(libraryId, folderPath, `${folderPath}/`);
+    db.prepare(
+      `DELETE FROM deleted_folders WHERE library_id = ? AND (folder_path = ? OR instr(folder_path, ?) = 1)`,
+    ).run(libraryId, folderPath, `${folderPath}/`);
+  } else if (mode === 'trash_contents' || trashedMediaCount > 0) {
+    // Soft-deleted media remain on disk inside absDir until Recycle Bin purge/restore
+    db.prepare(
+      `
+      INSERT INTO deleted_folders (library_id, folder_path, deleted_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(library_id, folder_path) DO UPDATE SET deleted_at = excluded.deleted_at
+      `,
+    ).run(libraryId, folderPath, nowIso);
+    db.prepare(
+      `DELETE FROM folder_covers WHERE library_id = ? AND (folder_path = ? OR instr(folder_path, ?) = 1)`,
+    ).run(libraryId, folderPath, `${folderPath}/`);
+    db.prepare(
+      `DELETE FROM folder_privacy WHERE library_id = ? AND (folder_path = ? OR instr(folder_path, ?) = 1) AND lock_passcode_hash IS NULL`,
     ).run(libraryId, folderPath, `${folderPath}/`);
   }
   invalidateFolderTreeCache(lib.rootPath);
 
   return { trashedMediaCount, removedDir };
+}
+
+export async function cleanupEmptyDeletedFoldersAfterPurge(
+  db: DatabaseSync,
+  scanner: ScanManager,
+  libraryIds: number[],
+): Promise<void> {
+  if (libraryIds.length === 0) return;
+  const uniqueLibs = Array.from(new Set(libraryIds));
+  const ph = uniqueLibs.map(() => '?').join(',');
+  let pendingRows: Array<{ library_id: number | bigint; folder_path: string }> = [];
+  try {
+    pendingRows = db
+      .prepare(
+        `
+        SELECT library_id, folder_path
+        FROM deleted_folders
+        WHERE library_id IN (${ph})
+        ORDER BY LENGTH(folder_path) DESC, folder_path DESC
+        `,
+      )
+      .all(...uniqueLibs) as Array<{ library_id: number | bigint; folder_path: string }>;
+  } catch {
+    return;
+  }
+  if (pendingRows.length === 0) return;
+
+  const hasMediaStmt = db.prepare(`
+    SELECT
+      COUNT(CASE WHEN deleted_at IS NULL THEN 1 END) AS active_cnt,
+      COUNT(CASE WHEN deleted_at IS NOT NULL THEN 1 END) AS trashed_cnt
+    FROM media
+    WHERE library_id = ? AND (folder_path = ? OR instr(folder_path, ?) = 1)
+  `);
+
+  for (const r of pendingRows) {
+    const libraryId = toNumber(r.library_id);
+    const folderPath = String(r.folder_path);
+    const counts = hasMediaStmt.get(libraryId, folderPath, `${folderPath}/`) as {
+      active_cnt: number | bigint;
+      trashed_cnt: number | bigint;
+    };
+    if (toNumber(counts.active_cnt) > 0) {
+      db.prepare('DELETE FROM deleted_folders WHERE library_id = ? AND folder_path = ?').run(
+        libraryId,
+        folderPath,
+      );
+      continue;
+    }
+    if (toNumber(counts.trashed_cnt) > 0) {
+      continue;
+    }
+    let lib: ReturnType<typeof getLibraryRow>;
+    try {
+      lib = getLibraryRow(db, libraryId);
+    } catch {
+      continue;
+    }
+    const absDir = resolveSafeFolderDir(lib.rootPath, folderPath);
+    let gone = !fs.existsSync(absDir);
+    if (!gone) {
+      await scanner.withWatchSuppressed([libraryId], async () => {
+        if (fs.existsSync(absDir) && !(await hasAnyRealFiles(absDir))) {
+          await moveFilesToOsTrash([absDir], [lib.rootPath], async () => {
+            if (!rootAvailable(lib.rootPath, lib.rootIdentity) || (await hasAnyRealFiles(absDir))) {
+              throw new Error('目录内容已变化');
+            }
+          }).catch(() => {});
+        }
+        gone = !fs.existsSync(absDir);
+      });
+    }
+    if (gone) {
+      db.prepare(
+        `DELETE FROM deleted_folders WHERE library_id = ? AND (folder_path = ? OR instr(folder_path, ?) = 1)`,
+      ).run(libraryId, folderPath, `${folderPath}/`);
+      db.prepare(
+        `DELETE FROM folder_privacy WHERE library_id = ? AND (folder_path = ? OR instr(folder_path, ?) = 1)`,
+      ).run(libraryId, folderPath, `${folderPath}/`);
+      db.prepare(
+        `DELETE FROM folder_covers WHERE library_id = ? AND (folder_path = ? OR instr(folder_path, ?) = 1)`,
+      ).run(libraryId, folderPath, `${folderPath}/`);
+      invalidateFolderTreeCache(lib.rootPath);
+    }
+  }
+}
+
+async function computeDirectoryBytes(dirPath: string): Promise<number> {
+  let total = 0;
+  const entries = await fsPromises
+    .readdir(dirPath, { withFileTypes: true })
+    .catch(() => []);
+  for (const e of entries) {
+    const full = path.join(dirPath, e.name);
+    if (e.isSymbolicLink()) continue;
+    if (e.isDirectory()) {
+      total += await computeDirectoryBytes(full);
+    } else if (e.isFile()) {
+      const st = await fsPromises.stat(full).catch(() => null);
+      if (st) total += st.size;
+    }
+  }
+  return total;
+}
+
+export interface RetainedBackupDirInfo {
+  libraryId: number;
+  rootPath: string;
+  rootIdentity: string | null;
+  absPath: string;
+  bytes: number;
+}
+
+export async function scanRetainedBackupsInLibraries(
+  db: DatabaseSync,
+  allowedLibraryIds?: number[] | null,
+  minAgeMs = 60_000,
+): Promise<{
+  retainedBytes: number;
+  retainedDirCount: number;
+  dirs: RetainedBackupDirInfo[];
+}> {
+  if (allowedLibraryIds !== null && allowedLibraryIds !== undefined) {
+    return { retainedBytes: 0, retainedDirCount: 0, dirs: [] };
+  }
+  const libs = db
+    .prepare('SELECT id, root_path, root_identity FROM libraries')
+    .all() as Array<{
+    id: number | bigint;
+    root_path: string;
+    root_identity: string | null;
+  }>;
+  const dirs: RetainedBackupDirInfo[] = [];
+  let retainedBytes = 0;
+  const cutoff = Date.now() - minAgeMs;
+
+  const walk = async (
+    libraryId: number,
+    rootPath: string,
+    rootIdentity: string | null,
+    curDir: string,
+    depth: number,
+  ) => {
+    if (depth > 16) return;
+    const entries = await fsPromises
+      .readdir(curDir, { withFileTypes: true })
+      .catch(() => []);
+    for (const e of entries) {
+      if (!e.isDirectory() || e.isSymbolicLink()) continue;
+      const full = path.join(curDir, e.name);
+      if (isLuminaInternalHiddenDir(e.name)) {
+        const st = await fsPromises.stat(full).catch(() => null);
+        if (!st || st.mtimeMs > cutoff) continue;
+        const bytes = await computeDirectoryBytes(full);
+        if (bytes > 0) {
+          dirs.push({ libraryId, rootPath, rootIdentity, absPath: full, bytes });
+          retainedBytes += bytes;
+        }
+        continue;
+      }
+      if (e.name.startsWith('.')) continue;
+      await walk(libraryId, rootPath, rootIdentity, full, depth + 1);
+    }
+  };
+
+  for (const lib of libs) {
+    const libraryId = toNumber(lib.id);
+    const rootPath = String(lib.root_path);
+    if (!rootAvailable(rootPath, lib.root_identity)) continue;
+    await walk(libraryId, rootPath, lib.root_identity, rootPath, 0);
+  }
+
+  return {
+    retainedBytes,
+    retainedDirCount: dirs.length,
+    dirs,
+  };
+}
+
+export async function cleanRetainedBackupsInLibraries(
+  db: DatabaseSync,
+  scanner: ScanManager,
+  minAgeMs = 60_000,
+): Promise<{ cleanedCount: number; freedBytes: number; errors: string[] }> {
+  const scanned = await scanRetainedBackupsInLibraries(db, null, minAgeMs);
+  if (scanned.dirs.length === 0) {
+    return { cleanedCount: 0, freedBytes: 0, errors: [] };
+  }
+  const libIds = Array.from(new Set(scanned.dirs.map((d) => d.libraryId)));
+  const allowedRoots = Array.from(new Set(scanned.dirs.map((d) => d.rootPath)));
+  const dirByPath = new Map(scanned.dirs.map((d) => [d.absPath, d]));
+
+  const res = await scanner.withWatchSuppressed(libIds, () =>
+    moveFilesToOsTrash(
+      scanned.dirs.map((d) => d.absPath),
+      allowedRoots,
+      async (file) => {
+        const info = dirByPath.get(file);
+        if (!info || !rootAvailable(info.rootPath, info.rootIdentity)) {
+          throw new Error('目录所在磁盘状态已变化');
+        }
+      },
+    ),
+  );
+
+  const trashedSet = new Set(res.trashed);
+  let freedBytes = 0;
+  for (const d of scanned.dirs) {
+    if (trashedSet.has(d.absPath)) freedBytes += d.bytes;
+  }
+  invalidateFolderTreeCache();
+  return {
+    cleanedCount: res.trashed.length,
+    freedBytes,
+    errors: res.errors,
+  };
 }
 
 export async function moveOrCopyMediaToFolder(

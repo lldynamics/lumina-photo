@@ -192,6 +192,26 @@ describe('Frontend Core Utilities', () => {
     const flat = flattenFolderTrees(trees);
     assert.equal(flat.length, 3);
     assert.equal(flat[2].folderPath, '2025/京都');
+    assert.equal(flat[2].isLockedSealed, false);
+
+    // Sealed locked folder marks isLockedSealed=true and suppresses children
+    const lockedTrees: LibraryFolderTree[] = [
+      {
+        ...trees[0],
+        children: [
+          {
+            ...trees[0].children[0],
+            isLocked: true,
+            effectiveLocked: true,
+            isUnlocked: false,
+          },
+        ],
+      },
+    ];
+    const flatLocked = flattenFolderTrees(lockedTrees);
+    assert.equal(flatLocked.length, 2);
+    assert.equal(flatLocked[1].folderPath, '2025');
+    assert.equal(flatLocked[1].isLockedSealed, true);
   });
 
   it('validates user preferences, theme resolution, and safe tile URL templates', () => {

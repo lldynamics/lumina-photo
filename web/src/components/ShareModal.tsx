@@ -172,7 +172,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({
             </div>
           )}
           {/^(localhost|127\.0\.0\.1|\[::1\])$/.test(new URL(shareBaseUrl).hostname) &&
-            <p className="text-xs text-zinc-500">此链接仅在本机可用。供其他设备访问时，请设置登录口令并以 HOST=0.0.0.0 ./start.sh 启动。</p>}
+            <p className="text-xs text-zinc-500">此链接仅在本机可用。供其他设备访问时，请在「设置中心 → 局域网与远程」按向导配置 HTTPS（或内网显式启用 LUMINA_ALLOW_INSECURE_LAN=1）并以 HOST=0.0.0.0 启动。</p>}
           {createdShare ? (
             <div className="rounded-2xl border border-indigo-200 dark:border-indigo-500/30 bg-indigo-50/60 dark:bg-indigo-950/30 p-4 flex flex-col items-center gap-3 text-center">
               <div className="text-sm font-semibold">{createdShare.title}</div>

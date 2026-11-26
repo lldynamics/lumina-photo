@@ -282,6 +282,10 @@ export const api = {
       `/api/timeline/storage${str ? `?${str}` : ''}`,
     );
   },
+  cleanRetainedBackups: () =>
+    apiPost<{ cleanedCount: number; freedBytes: number; errors: string[] }>(
+      '/api/timeline/storage/clean-retained',
+    ),
 
   getMediaDetail: (id: number) => apiGet<MediaDetail>(`/api/media/${id}`),
   updateMedia: (

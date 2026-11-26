@@ -515,8 +515,10 @@ export const ImportModal: React.FC<ImportModalProps> = ({
           <option
             key={`${opt.libraryId}::${opt.folderPath}`}
             value={`${opt.libraryId}::${opt.folderPath}`}
+            disabled={Boolean(opt.isLockedSealed)}
           >
             {opt.label}
+            {opt.isLockedSealed ? '（🔒 需先解锁）' : ''}
           </option>
         ))}
       </select>

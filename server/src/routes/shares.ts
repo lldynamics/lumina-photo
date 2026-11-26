@@ -37,6 +37,7 @@ import {
   streamVideoRange,
 } from '../media/videoPipeline.js';
 import {
+  extractClientIp,
   getOrCreateHmacSecret,
   hashSecretAsync,
   safeCompareHex,
@@ -47,6 +48,15 @@ import {
 import type { LanDiscoveryService } from '../services/lanDiscovery.js';
 import type { MediaItem, ShareItem } from '../types.js';
 import { getRequestAuth, parseAllowedLibraryIds, getAllowedLibraryIds, isLibraryAllowed, isSecureRequest } from './auth.js';
+
+async function isRegularFileAsync(filePath: string): Promise<boolean> {
+  try {
+    const st = await fsPromises.stat(filePath);
+    return st.isFile();
+  } catch {
+    return false;
+  }
+}
 
 function signShareCookie(token: string, secret: string): string {
   return signTokenHmac(`share:${token}`, secret);
@@ -546,7 +556,7 @@ export function registerShareRoutes(
   app.post<{ Params: { token: string }; Body: { passcode: string } }>(
     '/api/public/shares/:token/unlock',
     async (req, reply) => {
-      const rateKey = `share:${req.ip}:${req.params.token}`;
+      const rateKey = `share:${extractClientIp(req, cfg)}:${req.params.token}`;
       if (unlockLimiter.isRateLimited(rateKey)) {
         return reply
           .code(429)
@@ -621,7 +631,7 @@ export function registerShareRoutes(
       if (!info) return reply.code(404).send({ error: '媒体不存在' });
 
       const absPath = resolveSafeMediaPath(info.rootPath, info.relPath);
-      if (!fs.existsSync(absPath)) {
+      if (!(await isRegularFileAsync(absPath))) {
         return reply.code(404).send({ error: '原文件不存在' });
       }
 
@@ -645,7 +655,7 @@ export function registerShareRoutes(
       }
 
       const smPath = getSmallThumbPath(cfg, mediaId);
-      if (!fs.existsSync(smPath)) {
+      if (!(await isRegularFileAsync(smPath))) {
         await generateSmallThumbAndHash(
           cfg,
           mediaId,
@@ -689,7 +699,7 @@ export function registerShareRoutes(
       if (!info) return reply.code(404).send({ error: '媒体不存在' });
 
       const absPath = resolveSafeMediaPath(info.rootPath, info.relPath);
-      if (!fs.existsSync(absPath)) {
+      if (!(await isRegularFileAsync(absPath))) {
         return reply.code(404).send({ error: '原文件不存在' });
       }
 
@@ -753,7 +763,7 @@ export function registerShareRoutes(
     if (!info || info.mediaType !== 'video') return reply.code(404).send({ error: '媒体不存在' });
 
     const absPath = resolveSafeMediaPath(info.rootPath, info.relPath);
-    if (!fs.existsSync(absPath)) {
+    if (!(await isRegularFileAsync(absPath))) {
       return reply.code(404).send({ error: '视频文件不存在' });
     }
 
@@ -788,7 +798,7 @@ export function registerShareRoutes(
         info.rootPath,
         info.livePhotoRelPath,
       );
-      if (!fs.existsSync(absPath)) {
+      if (!(await isRegularFileAsync(absPath))) {
         return reply.code(404).send({ error: '实况视频文件不存在' });
       }
 

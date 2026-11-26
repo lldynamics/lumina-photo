@@ -45,7 +45,7 @@ export class LanDiscoveryService {
     try {
       this.bonjour = new Bonjour();
       this.service = this.bonjour.publish({
-        name: 'Lumina Photo',
+        name: '自己用的一个相册',
         type: tlsEnabled ? 'https' : 'http',
         port,
         txt: { app: 'lumina-photo' },

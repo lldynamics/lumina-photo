@@ -9,6 +9,10 @@ import type { AppConfig } from '../config.js';
 import { toNumber } from '../db/connection.js';
 import { getLibraryStats } from '../db/queries.js';
 import { FolderOperationError } from '../media/folderAlbums.js';
+import {
+  getBlockingLockForFolder,
+  getUnlockedFolderKeys,
+} from '../media/folderPrivacy.js';
 import { classifyFile } from '../media/formats.js';
 import {
   executeLocalImport,
@@ -36,15 +40,50 @@ export function registerImportRoutes(
   db: DatabaseSync,
   scanner: ScanManager,
 ): void {
+  const resolveAndAuthorizeTarget = (
+    req: FastifyRequest,
+    rawLibraryId: number | null,
+    targetFolderPath: string,
+  ): { libraryId: number } => {
+    const allowed = getAllowedLibraryIds(req);
+    let resolvedLibId = rawLibraryId;
+    if (!resolvedLibId || !Number.isInteger(resolvedLibId) || resolvedLibId <= 0) {
+      const allLibs = db
+        .prepare('SELECT id FROM libraries ORDER BY id ASC')
+        .all() as Array<{ id: number | bigint }>;
+      const firstLib = allLibs.find((l) =>
+        allowed ? allowed.includes(toNumber(l.id)) : true,
+      );
+      if (!firstLib) {
+        throw new FolderOperationError('尚未添加允许上传的图库目录', 400);
+      }
+      resolvedLibId = toNumber(firstLib.id);
+    } else if (!isLibraryAllowed(req, resolvedLibId)) {
+      throw new FolderOperationError('无权上传照片到该图库目录', 403);
+    }
+    if (
+      getBlockingLockForFolder(
+        db,
+        resolvedLibId,
+        targetFolderPath,
+        getUnlockedFolderKeys(req),
+      )
+    ) {
+      throw new FolderOperationError('目标文件夹已加密，请先解锁后再导入照片', 403);
+    }
+    return { libraryId: resolvedLibId };
+  };
+
   app.post('/api/import/upload', async (req, reply) => {
     const stagingDir = path.join(cfg.tmpDir, `import-${crypto.randomUUID()}`);
-    await fsPromises.mkdir(stagingDir, { recursive: true });
+    let stagingCreated = false;
 
     let libraryId: number | null = null;
     let targetFolderPath = '';
     let organizeByMonth = false;
     let skipDuplicates = true;
     let fileCount = 0;
+    let preCheckedBeforeFiles = false;
 
     try {
       const parts = req.parts();
@@ -53,14 +92,35 @@ export function registerImportRoutes(
           const val = String(part.value ?? '').trim();
           if (part.fieldname === 'libraryId' && val) {
             libraryId = Number(val);
+            preCheckedBeforeFiles = false;
           } else if (part.fieldname === 'targetFolderPath') {
             targetFolderPath = val;
+            preCheckedBeforeFiles = false;
           } else if (part.fieldname === 'organizeByMonth') {
             organizeByMonth = val === '1' || val === 'true';
           } else if (part.fieldname === 'skipDuplicates') {
             skipDuplicates = val !== '0' && val !== 'false';
           }
         } else {
+          if (!preCheckedBeforeFiles) {
+            // Drain stream without writing to disk if caller is unauthorized or folder is locked
+            try {
+              const authTarget = resolveAndAuthorizeTarget(
+                req,
+                libraryId,
+                targetFolderPath,
+              );
+              libraryId = authTarget.libraryId;
+              preCheckedBeforeFiles = true;
+            } catch (authErr) {
+              part.file.resume();
+              throw authErr;
+            }
+          }
+          if (!stagingCreated) {
+            await fsPromises.mkdir(stagingDir, { recursive: true });
+            stagingCreated = true;
+          }
           const cleanName = sanitizeUploadFilename(part.filename || 'file');
           let targetPath = path.join(stagingDir, cleanName);
           if (fs.existsSync(targetPath)) {
@@ -81,26 +141,14 @@ export function registerImportRoutes(
       }
 
       const allowed = getAllowedLibraryIds(req);
-      if (!libraryId) {
-        const allLibs = db
-          .prepare('SELECT id FROM libraries ORDER BY id ASC')
-          .all() as Array<{ id: number | bigint }>;
-        const firstLib = allLibs.find((l) =>
-          allowed ? allowed.includes(toNumber(l.id)) : true,
-        );
-        if (!firstLib) {
-          return reply
-            .code(400)
-            .send({ error: '尚未添加允许上传的图库目录' });
-        }
-        libraryId = toNumber(firstLib.id);
-      } else if (!isLibraryAllowed(req, libraryId)) {
-        return reply.code(403).send({ error: '无权上传照片到该图库目录' });
-      }
+      const unlocked = getUnlockedFolderKeys(req);
+      const resolved = resolveAndAuthorizeTarget(req, libraryId, targetFolderPath);
+      libraryId = resolved.libraryId;
 
       const result = await importStagedUploads(db, cfg, scanner, {
         stagingDir,
         allowedLibraryIds: allowed,
+        unlockedFolderKeys: unlocked,
         libraryId,
         targetFolderPath,
         organizeByMonth,
@@ -109,7 +157,7 @@ export function registerImportRoutes(
 
       return {
         ...result,
-        stats: getLibraryStats(db, allowed),
+        stats: getLibraryStats(db, allowed, unlocked),
       };
     } catch (err) {
       if (err instanceof FolderOperationError) {
@@ -119,7 +167,9 @@ export function registerImportRoutes(
         .code(500)
         .send({ error: (err as Error).message || '导入失败' });
     } finally {
-      await fsPromises.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
+      if (stagingCreated) {
+        await fsPromises.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
+      }
     }
   });
 
@@ -131,7 +181,12 @@ export function registerImportRoutes(
         if (!sourcePath) {
           return reply.code(400).send({ error: '请提供待导入目录路径' });
         }
-        return await previewLocalImport(db, sourcePath, cfg.allowedRoots);
+        return await previewLocalImport(
+          db,
+          sourcePath,
+          cfg.allowedRoots,
+          getUnlockedFolderKeys(req),
+        );
       } catch (err) {
         if (err instanceof FolderOperationError) {
           return reply.code(err.statusCode).send({ error: err.message });
@@ -160,6 +215,23 @@ export function registerImportRoutes(
       if (!Number.isInteger(targetLibraryId) || targetLibraryId <= 0) {
         return reply.code(400).send({ error: '请选择目标图库目录' });
       }
+      if (!isLibraryAllowed(req, targetLibraryId)) {
+        return reply.code(403).send({ error: '无权导入到该图库目录' });
+      }
+      const unlocked = getUnlockedFolderKeys(req);
+      if (
+        getBlockingLockForFolder(
+          db,
+          targetLibraryId,
+          body.targetFolderPath ?? '',
+          unlocked,
+        )
+      ) {
+        return reply.code(403).send({
+          error: '目标文件夹已加密，请先解锁后再导入照片',
+          folderLocked: true,
+        });
+      }
 
       const result = await executeLocalImport(db, cfg, scanner, {
         sourcePath: body.sourcePath,
@@ -168,11 +240,12 @@ export function registerImportRoutes(
         structureMode: body.structureMode ?? 'flat',
         transferMode: body.transferMode === 'move' ? 'move' : 'copy',
         skipDuplicates: body.skipDuplicates !== false,
+        unlockedFolderKeys: unlocked,
       });
 
       return {
         ...result,
-        stats: getLibraryStats(db),
+        stats: getLibraryStats(db, getAllowedLibraryIds(req), unlocked),
       };
     } catch (err) {
       if (err instanceof FolderOperationError) {
@@ -210,6 +283,38 @@ export function registerImportRoutes(
   const digest = (data: Buffer | string) => crypto.createHash('sha256').update(data).digest('hex');
   const completing = new Set<string>();
   const writers = new Map<string, number>();
+  const CHUNK_SESSION_TTL_MS = 48 * 3600_000;
+  let lastChunkSweepTs = 0;
+
+  async function pruneStaleChunkUploads(force = false): Promise<void> {
+    const now = Date.now();
+    if (!force && now - lastChunkSweepTs < 30 * 60_000) return;
+    lastChunkSweepTs = now;
+    const chunksRoot = path.join(cfg.tmpDir, 'chunks');
+    const entries = await fsPromises
+      .readdir(chunksRoot, { withFileTypes: true })
+      .catch(() => []);
+    for (const ent of entries) {
+      if (!ent.isDirectory()) continue;
+      const id = ent.name;
+      if (completing.has(id) || writers.has(id)) continue;
+      const sessionDir = path.join(chunksRoot, id);
+      const metaStat = await fsPromises
+        .stat(path.join(sessionDir, 'meta.json'))
+        .catch(() => null);
+      const dirStat =
+        metaStat ?? (await fsPromises.stat(sessionDir).catch(() => null));
+      if (!dirStat) continue;
+      if (now - dirStat.mtimeMs > CHUNK_SESSION_TTL_MS) {
+        await fsPromises
+          .rm(sessionDir, { recursive: true, force: true })
+          .catch(() => {});
+      }
+    }
+  }
+  setTimeout(() => {
+    void pruneStaleChunkUploads(true);
+  }, 5000).unref();
   const ownerKey = (req: FastifyRequest) => String(getRequestAuth(req)?.currentUser?.id ?? 'local-admin');
   function legacySessionId(req: FastifyRequest, meta: Pick<ChunkUploadMeta,
     'filename' | 'fileSize' | 'mtimeMs' | 'libraryId' | 'targetFolderPath' | 'organizeByMonth' | 'skipDuplicates'>) {
@@ -265,6 +370,7 @@ export function registerImportRoutes(
       chunkHashes?: string[];
     };
   }>('/api/import/chunked/init', async (req, reply) => {
+    void pruneStaleChunkUploads(false);
     const body = req.body ?? {};
     const cleanName = sanitizeUploadFilename(String(body.filename ?? ''));
     if (!classifyFile(cleanName)) {
@@ -329,6 +435,19 @@ export function registerImportRoutes(
     }
 
     const targetFolderPath = String(body.targetFolderPath ?? '').trim();
+    if (
+      getBlockingLockForFolder(
+        db,
+        libraryId,
+        targetFolderPath,
+        getUnlockedFolderKeys(req),
+      )
+    ) {
+      return reply.code(403).send({
+        error: '目标文件夹已加密，请先解锁后再上传导入',
+        folderLocked: true,
+      });
+    }
     const mtimeMs = Number(body.mtimeMs || 0);
     const organizeByMonth = body.organizeByMonth === true;
     const skipDuplicates = body.skipDuplicates !== false;
@@ -472,6 +591,20 @@ export function registerImportRoutes(
         if (completed) return { ...completed, stats: getLibraryStats(db, allowed) };
       }
       const meta = await readSession(req, uploadId);
+      const unlocked = getUnlockedFolderKeys(req);
+      if (
+        getBlockingLockForFolder(
+          db,
+          meta.libraryId,
+          meta.targetFolderPath,
+          unlocked,
+        )
+      ) {
+        return reply.code(403).send({
+          error: '目标文件夹已加密，请先解锁后再完成合并导入',
+          folderLocked: true,
+        });
+      }
       const sessions = [meta];
       if (req.body?.companionId) {
         const companion = await readSession(req, req.body.companionId);
@@ -496,6 +629,7 @@ export function registerImportRoutes(
         const result = await importStagedUploads(db, cfg, scanner, {
           stagingDir,
           allowedLibraryIds: getAllowedLibraryIds(req),
+          unlockedFolderKeys: unlocked,
           libraryId: meta.libraryId,
           receipts: operation ? { read: readReceipt, save: saveReceipt } : undefined,
           targetFolderPath: meta.targetFolderPath,
@@ -510,7 +644,7 @@ export function registerImportRoutes(
 
         return {
           ...result,
-          stats: getLibraryStats(db, getAllowedLibraryIds(req)),
+          stats: getLibraryStats(db, getAllowedLibraryIds(req), unlocked),
         };
       } catch (err) {
         if (err instanceof FolderOperationError) {

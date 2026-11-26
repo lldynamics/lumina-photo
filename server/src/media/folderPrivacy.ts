@@ -27,10 +27,15 @@ interface UnlockCookieItem {
 
 interface UnlockCookiePayload {
   exp: number;
+  u?: string;
   items: UnlockCookieItem[];
 }
 
 const requestUnlockedFoldersMap = new WeakMap<FastifyRequest, Set<string>>();
+
+export function getUnlockSubjectKey(userId: number | null | undefined): string {
+  return userId == null ? 'admin' : `u:${userId}`;
+}
 
 export function folderPrivacyKey(libraryId: number, folderPath: string): string {
   const clean = folderPath ? normalizeFolderPath(folderPath) : '';
@@ -122,6 +127,7 @@ export function parseUnlockedFolderKeys(
   req: FastifyRequest,
   db: DatabaseSync,
   secret: string,
+  subjectKey = 'admin',
 ): Set<string> {
   const raw = req.cookies?.[FOLDER_UNLOCK_COOKIE_NAME];
   if (!raw || typeof raw !== 'string') return new Set();
@@ -143,7 +149,8 @@ export function parseUnlockedFolderKeys(
     !payload ||
     typeof payload.exp !== 'number' ||
     payload.exp <= Date.now() ||
-    !Array.isArray(payload.items)
+    !Array.isArray(payload.items) ||
+    (payload.u ?? 'admin') !== subjectKey
   ) {
     return new Set();
   }
@@ -187,6 +194,7 @@ export function buildUnlockCookieValue(
   unlockedKeys: Iterable<string>,
   db: DatabaseSync,
   secret: string,
+  subjectKey = 'admin',
 ): string | null {
   const rules = listFolderPrivacyRules(db);
   const byKey = new Map<string, FolderPrivacyRule>();
@@ -213,6 +221,7 @@ export function buildUnlockCookieValue(
   if (items.length === 0) return null;
   const payload: UnlockCookiePayload = {
     exp: Date.now() + FOLDER_UNLOCK_TTL_MS,
+    u: subjectKey,
     items,
   };
   const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString(
@@ -220,6 +229,38 @@ export function buildUnlockCookieValue(
   );
   const sig = signTokenHmac(`folder-unlock:${encoded}`, secret);
   return `${encoded}.${sig}`;
+}
+
+export function remapUnlockedKeysOnRelocate(
+  unlockedKeys: ReadonlySet<string>,
+  sourceLibraryId: number,
+  sourceFolderPathRaw: string,
+  targetLibraryId: number,
+  targetFolderPathRaw: string,
+): { keys: Set<string>; changed: boolean } {
+  const sourceClean = sourceFolderPathRaw ? normalizeFolderPath(sourceFolderPathRaw) : '';
+  const targetClean = targetFolderPathRaw ? normalizeFolderPath(targetFolderPathRaw) : '';
+  if (!sourceClean || unlockedKeys.size === 0) {
+    return { keys: new Set(unlockedKeys), changed: false };
+  }
+  const exactSrc = folderPrivacyKey(sourceLibraryId, sourceClean);
+  const prefixSrc = `${exactSrc}/`;
+  const next = new Set<string>();
+  let changed = false;
+  for (const key of unlockedKeys) {
+    if (key === exactSrc) {
+      next.add(folderPrivacyKey(targetLibraryId, targetClean));
+      changed = true;
+    } else if (key.startsWith(prefixSrc)) {
+      const suffix = key.slice(prefixSrc.length);
+      const mappedPath = targetClean ? `${targetClean}/${suffix}` : suffix;
+      next.add(folderPrivacyKey(targetLibraryId, mappedPath));
+      changed = true;
+    } else {
+      next.add(key);
+    }
+  }
+  return { keys: next, changed };
 }
 
 export function setRequestUnlockedFolders(

@@ -549,6 +549,8 @@ export interface StorageBreakdownResponse {
   livePhotoBytes: number;
   trashBytes: number;
   trashCount: number;
+  retainedBytes?: number;
+  retainedDirCount?: number;
   byLibrary: Array<{
     libraryId: number;
     name: string;

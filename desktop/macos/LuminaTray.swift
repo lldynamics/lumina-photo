@@ -532,9 +532,11 @@ final class LuminaTrayController: NSObject, NSApplicationDelegate {
   private func findNodeCandidatesInGlobDir(_ baseDir: String) -> [String] {
     let fm = FileManager.default
     guard let entries = try? fm.contentsOfDirectory(atPath: baseDir) else { return [] }
-    return entries.sorted(by: >).map { entry in
-      URL(fileURLWithPath: baseDir).appendingPathComponent(entry).appendingPathComponent("bin/node").path
-    }
+    return entries
+      .sorted { $0.localizedStandardCompare($1) == .orderedDescending }
+      .map { entry in
+        URL(fileURLWithPath: baseDir).appendingPathComponent(entry).appendingPathComponent("bin/node").path
+      }
   }
 
   private func resolveNodePath(config: BundleConfig?) -> String? {

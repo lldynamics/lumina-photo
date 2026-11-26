@@ -6,7 +6,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { AiManager } from '../ai/aiManager.js';
 import type { AppConfig } from '../config.js';
 import { toNumber, withTransaction } from '../db/connection.js';
-import { getLibraries } from '../db/queries.js';
+import { getLibraries, reconcilePeopleIntegrity } from '../db/queries.js';
 import { invalidateFolderTreeCache } from '../media/folderAlbums.js';
 import { deleteCachedThumbs } from '../media/imagePipeline.js';
 import { isPathWithinAllowedRoots } from '../media/osTrash.js';
@@ -145,6 +145,7 @@ export function registerLibraryRoutes(
           }
         }
         db.prepare('DELETE FROM libraries WHERE id = ?').run(id);
+        reconcilePeopleIntegrity(db);
       });
 
       ai?.removeMediaVectors(mediaIds);

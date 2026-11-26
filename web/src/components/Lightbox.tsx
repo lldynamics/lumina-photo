@@ -1416,8 +1416,10 @@ export const Lightbox: React.FC<LightboxProps> = ({
                       <option
                         key={`${f.libraryId}::${f.folderPath}`}
                         value={`${f.libraryId}::${f.folderPath}`}
+                        disabled={Boolean(f.isLockedSealed)}
                       >
                         移动到：{f.label}
+                        {f.isLockedSealed ? '（🔒 需先解锁）' : ''}
                       </option>
                     ))}
                   </select>

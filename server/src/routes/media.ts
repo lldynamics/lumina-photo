@@ -14,11 +14,15 @@ import {
   getMediaFilePaths,
   getOnlineMediaFilePaths,
   recomputeOrganizedFlag,
+  reconcilePeopleIntegrity,
   syncMediaFts,
   syncMediaFtsBatch,
 } from '../db/queries.js';
 import { getAllowedLibraryIds } from './auth.js';
-import { invalidateFolderTreeCache } from '../media/folderAlbums.js';
+import {
+  cleanupEmptyDeletedFoldersAfterPurge,
+  invalidateFolderTreeCache,
+} from '../media/folderAlbums.js';
 import {
   buildPrivacySqlCondition,
   filterUnlockedMediaIds,
@@ -50,6 +54,15 @@ import type {
   BatchDateRequest,
   PurgeRequest,
 } from '../types.js';
+
+async function isRegularFileAsync(filePath: string): Promise<boolean> {
+  try {
+    const st = await fsPromises.stat(filePath);
+    return st.isFile();
+  } catch {
+    return false;
+  }
+}
 
 function parseMediaId(raw: string): number | null {
   const n = Number(raw);
@@ -119,7 +132,7 @@ export function registerMediaRoutes(
       }
 
       const smPath = getSmallThumbPath(cfg, id);
-      if (!fs.existsSync(smPath)) {
+      if (!(await isRegularFileAsync(smPath))) {
         const info = getOnlineMediaFilePaths(db, id, allowed);
         if (!info) return reply.code(404).send({ error: '未找到媒体记录' });
 
@@ -132,7 +145,7 @@ export function registerMediaRoutes(
           }
           throw err;
         }
-        if (!fs.existsSync(absPath)) {
+        if (!(await isRegularFileAsync(absPath))) {
           return reply.code(404).send({ error: '原文件不存在' });
         }
 
@@ -194,7 +207,7 @@ export function registerMediaRoutes(
         }
         throw err;
       }
-      if (!fs.existsSync(absPath)) {
+      if (!(await isRegularFileAsync(absPath))) {
         return reply.code(404).send({ error: '原文件不存在' });
       }
 
@@ -246,7 +259,7 @@ export function registerMediaRoutes(
         }
         throw err;
       }
-      if (!fs.existsSync(absPath)) {
+      if (!(await isRegularFileAsync(absPath))) {
         return reply.code(404).send({ error: '原文件不存在' });
       }
 
@@ -292,7 +305,7 @@ export function registerMediaRoutes(
       }
       throw err;
     }
-    if (!fs.existsSync(absPath)) {
+    if (!(await isRegularFileAsync(absPath))) {
       return reply.code(404).send({ error: '视频文件不存在' });
     }
 
@@ -329,7 +342,7 @@ export function registerMediaRoutes(
         }
         throw err;
       }
-      if (!fs.existsSync(absPath)) {
+      if (!(await isRegularFileAsync(absPath))) {
         return reply.code(404).send({ error: '视频文件不存在' });
       }
 
@@ -374,7 +387,7 @@ export function registerMediaRoutes(
         }
         throw err;
       }
-      if (!fs.existsSync(absPath)) {
+      if (!(await isRegularFileAsync(absPath))) {
         return reply.code(404).send({ error: '实况视频文件不存在' });
       }
 
@@ -528,12 +541,13 @@ export function registerMediaRoutes(
           const affected = withTransaction(db, () => {
             const res = db.prepare(`UPDATE media SET deleted_at=NULL,updated_at=?
             WHERE deleted_at IS NOT NULL AND id IN (SELECT value FROM json_each(?))`).run(nowIso, idsJson);
-            if (!all) recomputeOrganizedFlag(db, ids);
+            recomputeOrganizedFlag(db, ids);
+            reconcilePeopleIntegrity(db);
             return Number(res.changes);
           });
           invalidateFolderTreeCache();
           ai?.reloadVectorsFromDb();
-          return {ok:true, affected, stats:getLibraryStats(db, allowed)};
+          return {ok:true, affected, stats:getLibraryStats(db, allowed, unlocked)};
         } finally { restoresInProgress--; }
       }
 
@@ -696,7 +710,7 @@ export function registerMediaRoutes(
       return {
         ok: true,
         affected,
-        stats: getLibraryStats(db, allowed),
+        stats: getLibraryStats(db, allowed, unlocked),
       };
     },
   );
@@ -859,6 +873,7 @@ export function registerMediaRoutes(
             delFts.run(id);
             delMedia.run(id);
           }
+          reconcilePeopleIntegrity(db);
         });
         ai?.removeMediaVectors(purgedIds);
         await Promise.all(
@@ -868,6 +883,7 @@ export function registerMediaRoutes(
         );
       }
 
+      await cleanupEmptyDeletedFoldersAfterPurge(db, scanner, involvedLibIds);
       invalidateFolderTreeCache();
 
       return {
@@ -1102,6 +1118,7 @@ export function registerMediaRoutes(
                 id,
               );
               syncMediaFts(db, id);
+              reconcilePeopleIntegrity(db);
             });
             ai?.removeMediaVectors([id]);
 

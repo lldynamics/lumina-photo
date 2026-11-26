@@ -60,18 +60,29 @@ export async function findDuplicateInLibrary(
   precomputedQuickHash?: string,
   liveFile: string | null = null,
   allowedLibraryIds?: number[] | null,
+  unlockedKeys?: ReadonlySet<string> | readonly string[],
 ): Promise<DedupCheckResult> {
   const quickHash = precomputedQuickHash ?? await computeQuickHash(filePath, fileSize);
   const fullHash = await computeFullHash(filePath);
   const contentKey = liveFile ? fullHash + ':' + await computeFullHash(liveFile) : fullHash;
   const scope = buildAllowedLibraryCondition('m.library_id', allowedLibraryIds);
+  const lockCond = buildPrivacySqlCondition(db, 'm', {
+    kind: 'locked_only',
+    unlockedKeys,
+  });
+  const extraSql = [
+    scope.clause ? `AND ${scope.clause}` : '',
+    lockCond.clause ? `AND ${lockCond.clause}` : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
   const candidates = db.prepare(`
     SELECT m.id, l.name AS library_name, l.root_path, l.root_identity, m.rel_path, m.folder_path, m.filename,
            m.full_hash, m.live_photo_rel_path
     FROM media m JOIN libraries l ON l.id = m.library_id
     WHERE m.deleted_at IS NULL AND m.file_size = ? AND m.quick_hash = ?
-      AND (m.live_photo_rel_path IS NOT NULL) = ? ${scope.clause ? 'AND ' + scope.clause : ''}
-  `).all(fileSize, quickHash, liveFile ? 1 : 0, ...scope.params);
+      AND (m.live_photo_rel_path IS NOT NULL) = ? ${extraSql}
+  `).all(fileSize, quickHash, liveFile ? 1 : 0, ...scope.params, ...lockCond.params);
   for (const row of candidates) {
     const identity = await storedIdentity(db, row);
     if (identity?.key === contentKey) {

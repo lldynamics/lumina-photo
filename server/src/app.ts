@@ -31,6 +31,7 @@ import { registerFolderAlbumRoutes } from './routes/folderAlbums.js';
 import { registerFolderPrivacyRoutes } from './routes/folderPrivacy.js';
 import { registerImportRoutes } from './routes/import.js';
 import {
+  getUnlockSubjectKey,
   parseUnlockedFolderKeys,
   setRequestUnlockedFolders,
 } from './media/folderPrivacy.js';
@@ -187,7 +188,15 @@ export async function buildApp(
         authRequired: true,
       });
     }
-    setRequestUnlockedFolders(req, parseUnlockedFolderKeys(req, db, adminSecret));
+    setRequestUnlockedFolders(
+      req,
+      parseUnlockedFolderKeys(
+        req,
+        db,
+        adminSecret,
+        getUnlockSubjectKey(auth.currentUser?.id),
+      ),
+    );
 
     // 4. Enforce family role permissions (viewer = read-only + ZIP export, member = no host filesystem or admin operations)
     const role = auth.currentUser?.role ?? 'admin';
@@ -213,6 +222,7 @@ export async function buildApp(
     } else if (role === 'member' || auth.currentUser?.allowedLibraryIds != null) {
       if (
         urlPath === '/api/media/purge' ||
+        urlPath === '/api/timeline/storage/clean-retained' ||
         urlPath.startsWith('/api/users') ||
         urlPath.startsWith('/api/backup') ||
         urlPath === '/api/auth/passcode' ||
@@ -240,14 +250,14 @@ export async function buildApp(
   scanner.on('mediaRemoved', onScannerRemoved);
 
   registerAuthRoutes(app, cfg, db, adminSecret);
-  registerBackupRoutes(app, cfg, db);
+  registerBackupRoutes(app, cfg, db, aiManager);
   registerSystemRoutes(app, cfg, db, scanner, lan);
   registerLibraryRoutes(app, cfg, db, scanner, aiManager);
-  registerFolderAlbumRoutes(app, cfg, db, scanner);
+  registerFolderAlbumRoutes(app, cfg, db, scanner, adminSecret);
   registerFolderPrivacyRoutes(app, cfg, db, adminSecret);
   registerImportRoutes(app, cfg, db, scanner);
   registerExportRoutes(app, cfg, db);
-  registerTimelineRoutes(app, db);
+  registerTimelineRoutes(app, db, scanner);
   registerMediaRoutes(app, cfg, db, scanner, aiManager);
   registerAlbumRoutes(app, db);
   registerSmartAlbumRoutes(app, db);

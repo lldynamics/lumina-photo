@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { DatabaseSync } from 'node:sqlite';
 import type { AppConfig } from '../config.js';
 import { toNumber } from '../db/connection.js';
@@ -10,17 +10,29 @@ import {
   FolderOperationError,
   moveFolderAlbum,
   moveOrCopyMediaToFolder,
+  normalizeFolderPath,
   renameFolderAlbum,
   setFolderAlbumCover,
 } from '../media/folderAlbums.js';
 import type { ScanManager } from '../media/scanner.js';
 import {
+  buildUnlockCookieValue,
   filterUnlockedMediaIds,
+  FOLDER_UNLOCK_COOKIE_NAME,
+  FOLDER_UNLOCK_TTL_SEC,
   getBlockingLockForFolder,
   getUnlockedFolderKeys,
+  getUnlockSubjectKey,
   isFolderTreeLockedForMutation,
+  remapUnlockedKeysOnRelocate,
+  setRequestUnlockedFolders,
 } from '../media/folderPrivacy.js';
-import { getAllowedLibraryIds, isLibraryAllowed } from './auth.js';
+import {
+  getAllowedLibraryIds,
+  getRequestAuth,
+  isLibraryAllowed,
+  isSecureRequest,
+} from './auth.js';
 
 function handleError(
   err: unknown,
@@ -39,11 +51,49 @@ async function getScopedTrees(db: DatabaseSync, req: FastifyRequest) {
   return allowed ? all.filter((lib) => allowed.includes(lib.libraryId)) : all;
 }
 
+function syncRelocatedUnlockCookie(
+  reply: FastifyReply,
+  req: FastifyRequest,
+  cfg: AppConfig,
+  db: DatabaseSync,
+  adminSecret: string | undefined,
+  sourceLibraryId: number,
+  sourcePath: string,
+  targetLibraryId: number,
+  targetPath: string,
+): void {
+  const current = getUnlockedFolderKeys(req);
+  const { keys, changed } = remapUnlockedKeysOnRelocate(
+    current,
+    sourceLibraryId,
+    sourcePath,
+    targetLibraryId,
+    targetPath,
+  );
+  if (!changed) return;
+  setRequestUnlockedFolders(req, keys);
+  if (!adminSecret) return;
+  const subjectKey = getUnlockSubjectKey(getRequestAuth(req)?.currentUser?.id);
+  const cookieVal = buildUnlockCookieValue(keys, db, adminSecret, subjectKey);
+  if (!cookieVal) {
+    reply.clearCookie(FOLDER_UNLOCK_COOKIE_NAME, { path: '/' });
+  } else {
+    reply.setCookie(FOLDER_UNLOCK_COOKIE_NAME, cookieVal, {
+      path: '/',
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: isSecureRequest(req, cfg),
+      maxAge: FOLDER_UNLOCK_TTL_SEC,
+    });
+  }
+}
+
 export function registerFolderAlbumRoutes(
   app: FastifyInstance,
   cfg: AppConfig,
   db: DatabaseSync,
   scanner: ScanManager,
+  adminSecret?: string,
 ): void {
   app.get('/api/folder-albums/tree', async (req) => {
     const libraries = await getScopedTrees(db, req);
@@ -57,6 +107,26 @@ export function registerFolderAlbumRoutes(
       const libraryId = Number(req.body?.libraryId);
       if (!isLibraryAllowed(req, libraryId)) {
         return reply.code(403).send({ error: '无权操作该图库目录' });
+      }
+      const unlocked = getUnlockedFolderKeys(req);
+      const parentClean = req.body?.parentPath
+        ? normalizeFolderPath(req.body.parentPath)
+        : '';
+      const nameClean = req.body?.name ? normalizeFolderPath(req.body.name) : '';
+      const fullCandidate = parentClean
+        ? nameClean
+          ? `${parentClean}/${nameClean}`
+          : parentClean
+        : nameClean;
+      if (
+        getBlockingLockForFolder(db, libraryId, parentClean, unlocked) ||
+        (fullCandidate &&
+          getBlockingLockForFolder(db, libraryId, fullCandidate, unlocked))
+      ) {
+        return reply.code(403).send({
+          error: '目标文件夹已加密，请先解锁后再新建子文件夹',
+          folderLocked: true,
+        });
       }
       const res = await createFolderAlbum(
         db,
@@ -81,11 +151,12 @@ export function registerFolderAlbumRoutes(
         return reply.code(403).send({ error: '无权操作该图库目录' });
       }
       const unlocked = getUnlockedFolderKeys(req);
+      const sourceFolderPath = req.body?.folderPath ?? '';
       if (
         isFolderTreeLockedForMutation(
           db,
           libraryId,
-          req.body?.folderPath ?? '',
+          sourceFolderPath,
           unlocked,
         )
       ) {
@@ -98,8 +169,19 @@ export function registerFolderAlbumRoutes(
         db,
         scanner,
         libraryId,
-        req.body?.folderPath ?? '',
+        sourceFolderPath,
         req.body?.newName ?? '',
+      );
+      syncRelocatedUnlockCookie(
+        reply,
+        req,
+        cfg,
+        db,
+        adminSecret,
+        libraryId,
+        sourceFolderPath,
+        libraryId,
+        res.folderPath,
       );
       const libraries = await getScopedTrees(db, req);
       return { ...res, libraries };
@@ -126,11 +208,12 @@ export function registerFolderAlbumRoutes(
         return reply.code(403).send({ error: '无权操作该图库目录' });
       }
       const unlocked = getUnlockedFolderKeys(req);
+      const sourceFolderPath = req.body?.folderPath ?? '';
       if (
         isFolderTreeLockedForMutation(
           db,
           libraryId,
-          req.body?.folderPath ?? '',
+          sourceFolderPath,
           unlocked,
         ) ||
         getBlockingLockForFolder(
@@ -149,9 +232,20 @@ export function registerFolderAlbumRoutes(
         db,
         scanner,
         libraryId,
-        req.body?.folderPath ?? '',
+        sourceFolderPath,
         targetLibraryId,
         req.body?.targetParentPath ?? '',
+      );
+      syncRelocatedUnlockCookie(
+        reply,
+        req,
+        cfg,
+        db,
+        adminSecret,
+        libraryId,
+        sourceFolderPath,
+        res.libraryId,
+        res.folderPath,
       );
       const libraries = await getScopedTrees(db, req);
       return { ...res, libraries };

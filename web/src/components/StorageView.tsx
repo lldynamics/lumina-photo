@@ -25,6 +25,9 @@ interface StorageViewProps {
   onOpenLightbox: (item: MediaItem, list: MediaItem[]) => void;
   onTotalCountChange?: (total: number) => void;
   readOnly?: boolean;
+  isAdmin?: boolean;
+  onNotify?: (msg: string) => void;
+  onReloadRequest?: () => void;
 }
 
 type StorageTab = 'all' | 'videos' | 'gt100mb' | 'screenshots' | 'raw';
@@ -35,11 +38,15 @@ export const StorageView: React.FC<StorageViewProps> = ({
   onOpenLightbox,
   onTotalCountChange,
   readOnly = false,
+  isAdmin = false,
+  onNotify,
+  onReloadRequest,
 }) => {
   const [tab, setTab] = useState<StorageTab>('videos');
   const [data, setData] = useState<StorageBreakdownResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [cleaningRetained, setCleaningRetained] = useState(false);
 
   useEffect(() => {
     setLoading(true);
@@ -174,6 +181,48 @@ export const StorageView: React.FC<StorageViewProps> = ({
             ))}
           </div>
         )}
+
+        {isAdmin && (data?.retainedBytes ?? 0) > 0 && (
+          <div className="rounded-xl border border-amber-200 dark:border-amber-500/30 bg-amber-50/80 dark:bg-amber-950/30 px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-3">
+            <div className="text-xs text-amber-900 dark:text-amber-200">
+              <span className="font-medium">
+                移动与旋转安全留底备份：{formatBytes(data?.retainedBytes ?? 0)}
+              </span>
+              <span className="text-amber-700 dark:text-amber-300/80 ml-1.5">
+                （共 {data?.retainedDirCount ?? 0} 个隐藏目录，确认照片整理无误后可移入系统废纸篓释放空间）
+              </span>
+            </div>
+            <button
+              type="button"
+              disabled={cleaningRetained}
+              onClick={async () => {
+                if (
+                  !confirm(
+                    '确认将历史移动/旋转产生的隐藏原件留底目录移入系统废纸篓吗？',
+                  )
+                ) {
+                  return;
+                }
+                setCleaningRetained(true);
+                try {
+                  const res = await api.cleanRetainedBackups();
+                  onNotify?.(
+                    `已将 ${res.cleanedCount} 个留底目录移入系统废纸篓，释放 ${formatBytes(res.freedBytes)}`,
+                  );
+                  onReloadRequest?.();
+                } catch (err) {
+                  onNotify?.((err as Error).message || '清理留底失败');
+                } finally {
+                  setCleaningRetained(false);
+                }
+              }}
+              className="px-3 py-1.5 rounded-xl text-xs font-medium bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50 flex items-center gap-1.5 shrink-0"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              {cleaningRetained ? '正在移入系统废纸篓...' : '移入系统废纸篓释放空间'}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Tabs + Bulk Action */}
@@ -293,14 +342,16 @@ export const StorageView: React.FC<StorageViewProps> = ({
                   <div className="text-xs font-bold tabular-nums text-zinc-900 dark:text-white">
                     {formatBytes(totalItemBytes)}
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => void onTrashIds([item.id])}
-                    className="px-2.5 py-1 rounded-lg text-[11px] bg-rose-50 text-rose-600 hover:bg-rose-100 dark:bg-rose-950/50 dark:text-rose-300 flex items-center gap-1 ml-auto"
-                  >
-                    <Trash2 className="w-3 h-3" />
-                    移入回收站
-                  </button>
+                  {!readOnly && (
+                    <button
+                      type="button"
+                      onClick={() => void onTrashIds([item.id])}
+                      className="px-2.5 py-1 rounded-lg text-[11px] bg-rose-50 text-rose-600 hover:bg-rose-100 dark:bg-rose-950/50 dark:text-rose-300 flex items-center gap-1 ml-auto"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      移入回收站
+                    </button>
+                  )}
                 </div>
               </div>
             );

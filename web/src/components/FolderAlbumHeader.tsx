@@ -374,6 +374,7 @@ export const FolderAlbumHeader: React.FC<FolderAlbumHeaderProps> = ({
                 onDragOver={(e) => {
                   if (
                     canEdit &&
+                    !(c.effectiveLocked && !c.isUnlocked) &&
                     e.dataTransfer.types.includes(
                       'application/x-lumina-media-ids',
                     )
@@ -389,6 +390,7 @@ export const FolderAlbumHeader: React.FC<FolderAlbumHeaderProps> = ({
                 onDrop={async (e) => {
                   e.preventDefault();
                   setDropChildKey(null);
+                  if (c.effectiveLocked && !c.isUnlocked) return;
                   const raw = e.dataTransfer.getData(
                     'application/x-lumina-media-ids',
                   );

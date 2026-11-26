@@ -5,6 +5,7 @@ import type { AppConfig } from '../config.js';
 import { toNumber } from '../db/connection.js';
 import { FOLDER_UNLOCK_COOKIE_NAME } from '../media/folderPrivacy.js';
 import {
+  extractClientIp,
   hashSecretAsync,
   isLoopbackAddress,
   safeCompareHex,
@@ -81,17 +82,7 @@ export function isSecureRequest(req: FastifyRequest, cfg: AppConfig): boolean {
 }
 
 function getRateLimitClientIp(req: FastifyRequest, cfg: AppConfig): string {
-  const remote = req.raw.socket.remoteAddress || req.ip || 'unknown';
-  if (cfg.trustProxy || isLoopbackAddress(remote)) {
-    const xff = req.headers['x-forwarded-for'];
-    const rawXff = Array.isArray(xff) ? xff[0] : xff;
-    const firstHop = rawXff?.split(',')[0]?.trim();
-    if (firstHop) return firstHop;
-    const realIp = req.headers['x-real-ip'];
-    const rawReal = Array.isArray(realIp) ? realIp[0] : realIp;
-    if (rawReal?.trim()) return rawReal.trim();
-  }
-  return remote;
+  return extractClientIp(req, cfg);
 }
 
 function cookieOptions(req: FastifyRequest, cfg: AppConfig) {
@@ -499,6 +490,12 @@ export function registerAuthRoutes(
             secure: cOpts.secure,
           });
         }
+        if (req.cookies?.[FOLDER_UNLOCK_COOKIE_NAME]) {
+          reply.clearCookie(FOLDER_UNLOCK_COOKIE_NAME, {
+            path: '/',
+            secure: cOpts.secure,
+          });
+        }
 
         const base = evaluateAdminAuth(req, cfg, db, adminSecret);
         return {
@@ -560,6 +557,12 @@ export function registerAuthRoutes(
       reply.setCookie(ADMIN_COOKIE_NAME, adminToken, cOpts);
       if (req.cookies?.[USER_COOKIE_NAME]) {
         reply.clearCookie(USER_COOKIE_NAME, {
+          path: '/',
+          secure: cOpts.secure,
+        });
+      }
+      if (req.cookies?.[FOLDER_UNLOCK_COOKIE_NAME]) {
+        reply.clearCookie(FOLDER_UNLOCK_COOKIE_NAME, {
           path: '/',
           secure: cOpts.secure,
         });
@@ -821,12 +824,54 @@ export function registerAuthRoutes(
       return reply.code(400).send({ error: '无效的成员 ID' });
     }
 
-    const existing = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
+    const existing = db.prepare('SELECT * FROM users WHERE id = ?').get(id) as
+      | Record<string, unknown>
+      | undefined;
     if (!existing) {
       return reply.code(404).send({ error: '成员账号不存在' });
     }
 
     const body = req.body ?? {};
+    const isSelf = auth.currentUser?.id === id;
+    if (isSelf && body.isActive === false) {
+      return reply.code(400).send({ error: '不能停用当前正在登录的管理员账号' });
+    }
+    if (isSelf && body.role !== undefined && body.role !== 'admin') {
+      return reply.code(400).send({ error: '不能将当前登录的管理员账号降级为非管理员' });
+    }
+    const wasActiveGlobalAdmin =
+      toNumber(existing.is_active) === 1 &&
+      String(existing.role) === 'admin' &&
+      parseAllowedLibraryIds(existing.allowed_library_ids) === null;
+    const nextActive =
+      typeof body.isActive === 'boolean'
+        ? body.isActive
+        : toNumber(existing.is_active) === 1;
+    const nextRole =
+      body.role !== undefined ? body.role : (String(existing.role) as UserRole);
+    const nextAllowed =
+      body.allowedLibraryIds !== undefined
+        ? parseAllowedLibraryIds(body.allowedLibraryIds)
+        : parseAllowedLibraryIds(existing.allowed_library_ids);
+    if (wasActiveGlobalAdmin && (!nextActive || nextRole !== 'admin' || nextAllowed !== null)) {
+      const hasPasscode = computePasscodeFingerprint(cfg, getSetting(db, 'admin_passcode_hash')) !== null;
+      if (!hasPasscode) {
+        const otherAdmins = db
+          .prepare(
+            "SELECT COUNT(*) AS cnt FROM users WHERE id != ? AND is_active = 1 AND role = 'admin' AND allowed_library_ids IS NULL",
+          )
+          .get(id) as { cnt: number | bigint };
+        const otherUsers = db
+          .prepare('SELECT COUNT(*) AS cnt FROM users WHERE id != ? AND is_active = 1')
+          .get(id) as { cnt: number | bigint };
+        if (toNumber(otherAdmins.cnt) === 0 && toNumber(otherUsers.cnt) > 0) {
+          return reply.code(400).send({
+            error: '请先设置全局管理员口令或保留至少一个全局管理员账号，以免锁死管理后台',
+          });
+        }
+      }
+    }
+
     const sets: string[] = [];
     const params: Array<string | number | null> = [];
 
@@ -891,6 +936,36 @@ export function registerAuthRoutes(
       const id = Number(req.params.id);
       if (!Number.isInteger(id) || id <= 0) {
         return reply.code(400).send({ error: '无效的成员 ID' });
+      }
+      if (auth.currentUser?.id === id) {
+        return reply.code(400).send({ error: '不能删除当前正在登录的管理员账号' });
+      }
+      const existing = db.prepare('SELECT * FROM users WHERE id = ?').get(id) as
+        | Record<string, unknown>
+        | undefined;
+      if (
+        existing &&
+        toNumber(existing.is_active) === 1 &&
+        String(existing.role) === 'admin' &&
+        parseAllowedLibraryIds(existing.allowed_library_ids) === null
+      ) {
+        const hasPasscode =
+          computePasscodeFingerprint(cfg, getSetting(db, 'admin_passcode_hash')) !== null;
+        if (!hasPasscode) {
+          const otherAdmins = db
+            .prepare(
+              "SELECT COUNT(*) AS cnt FROM users WHERE id != ? AND is_active = 1 AND role = 'admin' AND allowed_library_ids IS NULL",
+            )
+            .get(id) as { cnt: number | bigint };
+          const otherUsers = db
+            .prepare('SELECT COUNT(*) AS cnt FROM users WHERE id != ? AND is_active = 1')
+            .get(id) as { cnt: number | bigint };
+          if (toNumber(otherAdmins.cnt) === 0 && toNumber(otherUsers.cnt) > 0) {
+            return reply.code(400).send({
+              error: '请先设置全局管理员口令或保留至少一个全局管理员账号，以免锁死管理后台',
+            });
+          }
+        }
       }
       db.prepare('DELETE FROM users WHERE id = ?').run(id);
       return { ok: true };

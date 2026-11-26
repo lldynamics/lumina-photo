@@ -16,12 +16,13 @@ import {
   getBlockingLockRule,
   getFolderPrivacyRule,
   getUnlockedFolderKeys,
+  getUnlockSubjectKey,
   listFolderPrivacyRules,
   setRequestUnlockedFolders,
 } from '../media/folderPrivacy.js';
 import {
+  extractClientIp,
   hashSecretAsync,
-  isLoopbackAddress,
   SlidingWindowRateLimiter,
   verifySecretAsync,
 } from '../services/cryptoAuth.js';
@@ -36,14 +37,11 @@ import {
 const unlockLimiter = new SlidingWindowRateLimiter(10, 5 * 60_000);
 
 function getClientIp(req: FastifyRequest, cfg: AppConfig): string {
-  const remote = req.raw.socket.remoteAddress || req.ip || 'unknown';
-  if (cfg.trustProxy || isLoopbackAddress(remote)) {
-    const xff = req.headers['x-forwarded-for'];
-    const rawXff = Array.isArray(xff) ? xff[0] : xff;
-    const firstHop = rawXff?.split(',')[0]?.trim();
-    if (firstHop) return firstHop;
-  }
-  return remote;
+  return extractClientIp(req, cfg);
+}
+
+function getRequestSubjectKey(req: FastifyRequest): string {
+  return getUnlockSubjectKey(getRequestAuth(req)?.currentUser?.id);
 }
 
 function setUnlockCookie(
@@ -262,7 +260,7 @@ export function registerFolderPrivacyRoutes(
       reply,
       req,
       cfg,
-      buildUnlockCookieValue(unlocked, db, adminSecret),
+      buildUnlockCookieValue(unlocked, db, adminSecret, getRequestSubjectKey(req)),
     );
 
     const rules = buildRuleItems(db, unlocked, allowed);
@@ -325,7 +323,7 @@ export function registerFolderPrivacyRoutes(
       reply,
       req,
       cfg,
-      buildUnlockCookieValue(unlocked, db, adminSecret),
+      buildUnlockCookieValue(unlocked, db, adminSecret, getRequestSubjectKey(req)),
     );
 
     const libraries = await getScopedTrees(db, req, unlocked);
@@ -379,7 +377,7 @@ export function registerFolderPrivacyRoutes(
       reply,
       req,
       cfg,
-      buildUnlockCookieValue(unlocked, db, adminSecret),
+      buildUnlockCookieValue(unlocked, db, adminSecret, getRequestSubjectKey(req)),
     );
     const libraries = await getScopedTrees(db, req, unlocked);
     return { ok: true, libraries };

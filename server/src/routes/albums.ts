@@ -6,6 +6,11 @@ import {
   getDescendantAlbumIds,
   recomputeOrganizedFlag,
 } from '../db/queries.js';
+import {
+  filterUnlockedMediaIds,
+  getUnlockedFolderKeys,
+  isMediaIdLockedForRequest,
+} from '../media/folderPrivacy.js';
 import { getAllowedLibraryIds } from './auth.js';
 
 function wouldCreateCycle(
@@ -187,6 +192,12 @@ export function registerAlbumRoutes(
         if (allowed !== null && !allowed.includes(toNumber(mediaRow.library_id))) {
           return reply.code(403).send({ error: '无权使用该照片作为相册封面' });
         }
+        if (isMediaIdLockedForRequest(db, cid, getUnlockedFolderKeys(req))) {
+          return reply.code(403).send({
+            error: '该照片位于已加密文件夹中，请先解锁',
+            folderLocked: true,
+          });
+        }
         sets.push('cover_media_id = ?');
         params.push(cid);
       }
@@ -254,8 +265,20 @@ export function registerAlbumRoutes(
             .filter((x) => Number.isInteger(x) && x > 0)
         : [];
       const allowed = getAllowedLibraryIds(req);
-      let mediaIds = rawIds;
-      if (allowed !== null && rawIds.length > 0) {
+      if (allowed !== null && albumHasUnauthorizedMedia(db, [albumId], allowed)) {
+        return reply
+          .code(403)
+          .send({ error: '该相册包含无权访问图库的照片，仅管理员可修改' });
+      }
+      const unlocked = getUnlockedFolderKeys(req);
+      let mediaIds = filterUnlockedMediaIds(db, rawIds, unlocked);
+      if (rawIds.length > 0 && mediaIds.length === 0) {
+        return reply.code(403).send({
+          error: '所选照片位于已加密文件夹中，请先解锁',
+          folderLocked: true,
+        });
+      }
+      if (allowed !== null && mediaIds.length > 0) {
         if (allowed.length === 0) {
           return reply.code(403).send({ error: '无权操作所选照片' });
         }
@@ -263,8 +286,11 @@ export function registerAlbumRoutes(
           .prepare(
             `SELECT id FROM media WHERE id IN (SELECT value FROM json_each(?)) AND library_id IN (SELECT value FROM json_each(?))`,
           )
-          .all(JSON.stringify(rawIds), JSON.stringify(allowed)) as Array<{ id: number | bigint }>;
+          .all(JSON.stringify(mediaIds), JSON.stringify(allowed)) as Array<{ id: number | bigint }>;
         mediaIds = rows.map((r) => toNumber(r.id));
+        if (mediaIds.length === 0) {
+          return reply.code(403).send({ error: '无权操作所选照片' });
+        }
       }
       if (mediaIds.length === 0) {
         return reply.code(400).send({ error: '请提供有效的照片列表' });
@@ -301,7 +327,19 @@ export function registerAlbumRoutes(
       }
 
       const allowed = getAllowedLibraryIds(req);
-      let mediaIds = rawIds;
+      if (allowed !== null && albumHasUnauthorizedMedia(db, [albumId], allowed)) {
+        return reply
+          .code(403)
+          .send({ error: '该相册包含无权访问图库的照片，仅管理员可修改' });
+      }
+      const unlocked = getUnlockedFolderKeys(req);
+      let mediaIds = filterUnlockedMediaIds(db, rawIds, unlocked);
+      if (mediaIds.length === 0) {
+        return reply.code(403).send({
+          error: '所选照片位于已加密文件夹中，请先解锁',
+          folderLocked: true,
+        });
+      }
       if (allowed !== null) {
         if (allowed.length === 0) {
           return reply.code(403).send({ error: '无权操作所选照片' });
@@ -310,7 +348,7 @@ export function registerAlbumRoutes(
           .prepare(
             `SELECT id FROM media WHERE id IN (SELECT value FROM json_each(?)) AND library_id IN (SELECT value FROM json_each(?))`,
           )
-          .all(JSON.stringify(rawIds), JSON.stringify(allowed)) as Array<{
+          .all(JSON.stringify(mediaIds), JSON.stringify(allowed)) as Array<{
           id: number | bigint;
         }>;
         mediaIds = rows.map((r) => toNumber(r.id));

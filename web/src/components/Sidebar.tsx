@@ -540,8 +540,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </form>
         ) : (
           <div
-            draggable
+            draggable={canEdit && !(node.effectiveLocked && !node.isUnlocked)}
             onDragStart={(e) => {
+              if (!canEdit || (node.effectiveLocked && !node.isUnlocked)) {
+                e.preventDefault();
+                return;
+              }
               e.stopPropagation();
               e.dataTransfer.setData(
                 'application/x-lumina-folder',
@@ -553,7 +557,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
               e.dataTransfer.effectAllowed = 'move';
             }}
             onDragOver={(e) => {
-              if (isAcceptingFolderDrop(e)) {
+              if (
+                !(node.effectiveLocked && !node.isUnlocked) &&
+                isAcceptingFolderDrop(e)
+              ) {
                 e.preventDefault();
                 e.dataTransfer.dropEffect = 'move';
                 if (dragOverKey !== nodeKey) setDragOverKey(nodeKey);
@@ -576,9 +583,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
             onDragLeave={() => {
               if (dragOverKey === nodeKey) setDragOverKey(null);
             }}
-            onDrop={(e) =>
-              void handleDropOnFolder(e, node.libraryId, node.folderPath)
-            }
+            onDrop={(e) => {
+              if (node.effectiveLocked && !node.isUnlocked) return;
+              void handleDropOnFolder(e, node.libraryId, node.folderPath);
+            }}
             className={`group flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs cursor-pointer transition-colors ${
               isDragTarget
                 ? 'bg-blue-100 ring-2 ring-blue-500 text-blue-800 dark:bg-blue-500/30 dark:text-blue-200'
@@ -652,57 +660,42 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <Lock className="w-3 h-3" />
                 </button>
               )}
-              {canEdit && (
+              {!(node.effectiveLocked && !node.isUnlocked) && (
                 <>
+                  {canEdit && (
+                    <>
+                      <button
+                        type="button"
+                        title="新建子相册"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setCreatingTarget(nodeKey);
+                          setNewFolderName('');
+                        }}
+                        className="p-0.5 rounded hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-500"
+                      >
+                        <FolderPlus className="w-3 h-3" />
+                      </button>
+                      <button
+                        type="button"
+                        title="重命名文件夹"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setRenamingKey(nodeKey);
+                          setRenameDraft(node.name);
+                        }}
+                        className="p-0.5 rounded hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-500"
+                      >
+                        <Pencil className="w-3 h-3" />
+                      </button>
+                    </>
+                  )}
                   <button
                     type="button"
-                    title="新建子相册"
+                    title="导出此相册"
                     onClick={(e) => {
                       e.stopPropagation();
-                      setCreatingTarget(nodeKey);
-                      setNewFolderName('');
-                    }}
-                    className="p-0.5 rounded hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-500"
-                  >
-                    <FolderPlus className="w-3 h-3" />
-                  </button>
-                  <button
-                    type="button"
-                    title="重命名文件夹"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setRenamingKey(nodeKey);
-                      setRenameDraft(node.name);
-                    }}
-                    className="p-0.5 rounded hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-500"
-                  >
-                    <Pencil className="w-3 h-3" />
-                  </button>
-                </>
-              )}
-              <button
-                type="button"
-                title="导出此相册"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onExportFolderAlbum(
-                    node.libraryId,
-                    node.folderPath,
-                    node.name,
-                  );
-                }}
-                className="p-0.5 rounded hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-500"
-              >
-                <Download className="w-3 h-3" />
-              </button>
-              {canEdit && (
-                <>
-                  <button
-                    type="button"
-                    title="局域网分享此相册"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onShareFolderAlbum(
+                      onExportFolderAlbum(
                         node.libraryId,
                         node.folderPath,
                         node.name,
@@ -710,19 +703,40 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     }}
                     className="p-0.5 rounded hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-500"
                   >
-                    <Share2 className="w-3 h-3" />
+                    <Download className="w-3 h-3" />
                   </button>
-                  <button
-                    type="button"
-                    title="删除相册文件夹"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void onDeleteFolderAlbum(node.libraryId, node.folderPath);
-                    }}
-                    className="p-0.5 rounded hover:bg-red-100 dark:hover:bg-red-900/40 text-zinc-400 hover:text-red-500"
-                  >
-                    <Trash2 className="w-3 h-3" />
-                  </button>
+                  {canEdit && (
+                    <>
+                      {!node.effectiveLocked && (
+                        <button
+                          type="button"
+                          title="局域网分享此相册"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onShareFolderAlbum(
+                              node.libraryId,
+                              node.folderPath,
+                              node.name,
+                            );
+                          }}
+                          className="p-0.5 rounded hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-500"
+                        >
+                          <Share2 className="w-3 h-3" />
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        title="删除相册文件夹"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void onDeleteFolderAlbum(node.libraryId, node.folderPath);
+                        }}
+                        className="p-0.5 rounded hover:bg-red-100 dark:hover:bg-red-900/40 text-zinc-400 hover:text-red-500"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    </>
+                  )}
                 </>
               )}
             </div>
@@ -1409,7 +1423,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <div key={lib.libraryId} className="space-y-0.5">
                     <div
                       onDragOver={(e) => {
-                        if (isAcceptingFolderDrop(e)) {
+                        if (
+                          !(lib.isLocked && !lib.isUnlocked) &&
+                          isAcceptingFolderDrop(e)
+                        ) {
                           e.preventDefault();
                           e.dataTransfer.dropEffect = 'move';
                           if (dragOverKey !== rootKey) setDragOverKey(rootKey);
@@ -1432,9 +1449,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       onDragLeave={() => {
                         if (dragOverKey === rootKey) setDragOverKey(null);
                       }}
-                      onDrop={(e) =>
-                        void handleDropOnFolder(e, lib.libraryId, '')
-                      }
+                      onDrop={(e) => {
+                        if (lib.isLocked && !lib.isUnlocked) return;
+                        void handleDropOnFolder(e, lib.libraryId, '');
+                      }}
                       onClick={() => {
                         onSelectFolderAlbum(lib.libraryId, '');
                         onCloseMobile();
@@ -1481,35 +1499,39 @@ export const Sidebar: React.FC<SidebarProps> = ({
                             <Lock className="w-3 h-3" />
                           </button>
                         )}
-                        {canEdit && (
-                          <button
-                            type="button"
-                            title="在此图库下新建相册文件夹"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setCreatingTarget(rootKey);
-                              setNewFolderName('');
-                            }}
-                            className="p-0.5 rounded hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-500"
-                          >
-                            <FolderPlus className="w-3 h-3" />
-                          </button>
+                        {!(lib.isLocked && !lib.isUnlocked) && (
+                          <>
+                            {canEdit && (
+                              <button
+                                type="button"
+                                title="在此图库下新建相册文件夹"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setCreatingTarget(rootKey);
+                                  setNewFolderName('');
+                                }}
+                                className="p-0.5 rounded hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-500"
+                              >
+                                <FolderPlus className="w-3 h-3" />
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              title="导出整个图库"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onExportFolderAlbum(
+                                  lib.libraryId,
+                                  '',
+                                  lib.libraryName,
+                                );
+                              }}
+                              className="p-0.5 rounded hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-500"
+                            >
+                              <Download className="w-3 h-3" />
+                            </button>
+                          </>
                         )}
-                        <button
-                          type="button"
-                          title="导出整个图库"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onExportFolderAlbum(
-                              lib.libraryId,
-                              '',
-                              lib.libraryName,
-                            );
-                          }}
-                          className="p-0.5 rounded hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-500"
-                        >
-                          <Download className="w-3 h-3" />
-                        </button>
                       </div>
                     </div>
 

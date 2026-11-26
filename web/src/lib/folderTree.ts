@@ -7,6 +7,8 @@ export interface FlatFolderOption {
   label: string;
   depth: number;
   totalCount: number;
+  isLockedSealed?: boolean;
+  isEffectiveLocked?: boolean;
 }
 
 export function flattenFolderTrees(
@@ -21,6 +23,7 @@ export function flattenFolderTrees(
     depth: number,
   ) => {
     for (const n of nodes) {
+      const sealed = Boolean(n.effectiveLocked && !n.isUnlocked);
       out.push({
         libraryId: libId,
         libraryName: libName,
@@ -28,14 +31,17 @@ export function flattenFolderTrees(
         label: `${'  '.repeat(depth)}└ ${n.name}`,
         depth,
         totalCount: n.totalCount,
+        isLockedSealed: sealed,
+        isEffectiveLocked: Boolean(n.effectiveLocked),
       });
-      if (n.children.length > 0) {
+      if (n.children.length > 0 && !sealed) {
         walk(libId, libName, n.children, depth + 1);
       }
     }
   };
 
   for (const t of trees) {
+    const rootSealed = Boolean(t.isLocked && !t.isUnlocked);
     out.push({
       libraryId: t.libraryId,
       libraryName: t.libraryName,
@@ -43,8 +49,12 @@ export function flattenFolderTrees(
       label: `${t.libraryName}（根目录）`,
       depth: 0,
       totalCount: t.totalCount,
+      isLockedSealed: rootSealed,
+      isEffectiveLocked: Boolean(t.isLocked),
     });
-    walk(t.libraryId, t.libraryName, t.children, 1);
+    if (!rootSealed) {
+      walk(t.libraryId, t.libraryName, t.children, 1);
+    }
   }
 
   return out;

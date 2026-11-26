@@ -1,17 +1,33 @@
 # Changelog
 
-All notable changes to **Lumina Photo · 光影本地相册** will be documented in this file.
+All notable changes to **自己用的一个相册 (Lumina Photo)** will be documented in this file.
 
 ## [Unreleased]
 
-### Added
-- Native macOS menu bar and Linux tray launchers with launch-at-login controls.
-- Folder passcodes and an option to exclude folders from global albums and search.
+### Security
+- **Remote HTTPS Enforcement & Certificate Validation**: Remote access requires HTTPS (`LUMINA_TLS_CERT` / `LUMINA_TLS_KEY` with SAN host/IP verification) by default; plain HTTP stays available on loopback, with explicit opt-in (`LUMINA_ALLOW_INSECURE_LAN=1`) for trusted private tunnels.
+- **Spoof-Resistant Proxy Rate Limiting**: Unified `extractClientIp` across `/api/auth/login`, `/api/folder-privacy/unlock`, and `/api/public/shares/:token/unlock`, selecting the rightmost non-loopback `X-Forwarded-For` hop behind trusted/loopback proxies to prevent leftmost header spoofing and shared tunnel lockouts.
+- **End-to-End Folder Privacy Hardening**:
+  - Bound `lumina_folder_unlocks` cookies to the authenticated user identity, cleared unlock cookies on account switch, and automatically remapped unlock cookies when renaming or moving unlocked encrypted folders.
+  - Enforced folder lock checks across subfolder creation, early pre-write multipart/chunked/local imports, and virtual curated album mutations.
+  - Eliminated duplicate-import path leaks, AI/scanner SSE `currentFile` leaks, and `missingPhashCount` side-channels on locked/excluded folders.
+  - Stripped `folder_privacy.lock_passcode_hash` from metadata backup archives while preserving and restoring `is_excluded` folder rules.
+  - Added self-lockout protection preventing sole/logged-in admins from deleting, deactivating, or demoting the last global admin credential.
 
-### Changed
-- Remote access requires HTTPS by default. Plain HTTP stays available on loopback, with explicit opt-in for other interfaces.
-- Windows photo rotation and cross-volume moves verify extended attributes and alternate data streams before accepting the result.
-- The Node.js runtime must provide SQLite FTS5. The minimum supported 22.x release is 22.16.0.
+### Added
+- **Desktop Launchers & Menu Bar / Tray Helpers**: Native macOS `自己用的一个相册.app` (`LuminaTray.swift` with natural semantic Node version sorting) and Linux system tray helper (`lumina-tray.py`) with launch-at-login controls (`LaunchAgent` / XDG autostart) and single-instance IPC supervision.
+- **Folder Passcodes & Global Exclusion**: Per-folder passcode locks (`LockedFolderGate`, `FolderPrivacyModal`, `FolderPrivacySettingsPanel`), unified `SettingsModal`, and locked-folder disabling across drag-and-drop, context menus, and target folder pickers.
+- **Retained Originals Space Breakdown & One-Click OS-Trash Cleanup**: Surfaced `.lumina-retained-*` and `.lumina-originals` backup footprint in `StorageView` with one-click OS Trash cleanup (`POST /api/timeline/storage/clean-retained`).
+
+### Fixed
+- **Deleted Folder Lifecycle (`deleted_folders`)**: Prevented folders deleted with `trash_contents` from reappearing after emptying the Recycle Bin, and allowed deleting empty folders containing internal `.lumina-*` backup subdirectories while preserving non-media sidecar files.
+- **People Cover & Integrity Reconciliation**: Preserved manual `cover_face_id` selections outside a person's top-4 confidence samples when privacy rules exist; added `reconcilePeopleIntegrity` across purge, library removal, photo rotation, scanner updates, and backup restore; fixed `is_organized` recomputation on `all_trashed` restore.
+- **Backup/Restore Concurrency & Tag Navigation**: Added mutual exclusion and multipart truncation validation to `/api/backup/restore`, refreshed folder tree cache and AI vectors after restore, surfaced partial errors in batch media move/copy, and fixed sidebar tag rename/delete navigation jumps.
+- **Zero-Data-Loss File & Metadata Verification**: Windows/macOS/Linux photo moves, rotations, and cross-volume folder moves verify extended attributes, Finder metadata, and alternate data streams before retiring sources.
+
+### Performance
+- **Smart Album Count Cache & Async Media Checks**: Cached `getSmartAlbumsWithCounts` keyed by SQLite `pragma_data_version` + `total_changes()`, switched media/share streaming checks to async `stat`, avoided redundant temporary staging retention copies on browser uploads, and added 48-hour orphan cleanup for `tmp/chunks`.
+- **Runtime Requirement**: Node.js runtime must provide SQLite FTS5 (minimum supported 22.x release is 22.16.0).
 
 ## [1.2.0] - 2026-11-23
 

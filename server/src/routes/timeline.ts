@@ -14,11 +14,17 @@ import {
   verifyDuplicateGroupsInLibrary,
 } from '../media/dedup.js';
 import {
+  cleanRetainedBackupsInLibraries,
+  scanRetainedBackupsInLibraries,
+} from '../media/folderAlbums.js';
+import {
+  buildPrivacySqlCondition,
   getBlockingLockForFolder,
   getUnlockedFolderKeyList,
   getUnlockedFolderKeys,
 } from '../media/folderPrivacy.js';
-import { getAllowedLibraryIds } from './auth.js';
+import type { ScanManager } from '../media/scanner.js';
+import { getAllowedLibraryIds, getRequestAuth } from './auth.js';
 import type { MediaFilterParams, MediaType } from '../types.js';
 
 export interface TimelineQuery {
@@ -160,6 +166,7 @@ export function parseTimelineFilter(q: TimelineQuery): MediaFilterParams {
 export function registerTimelineRoutes(
   app: FastifyInstance,
   db: DatabaseSync,
+  scanner?: ScanManager,
 ): void {
   app.get<{ Querystring: TimelineQuery }>(
     '/api/timeline/buckets',
@@ -265,12 +272,18 @@ export function registerTimelineRoutes(
         allowed,
       );
       const libCond = buildAllowedLibraryCondition('library_id', allowed);
-      const libSql = libCond.clause ? `AND ${libCond.clause}` : '';
+      const privCond = buildPrivacySqlCondition(db, '', { kind: 'global' });
+      const libSql = [
+        libCond.clause ? `AND ${libCond.clause}` : '',
+        privCond.clause ? `AND ${privCond.clause}` : '',
+      ]
+        .filter(Boolean)
+        .join(' ');
       const missingRow = db
         .prepare(
           `SELECT COUNT(*) AS cnt FROM media WHERE deleted_at IS NULL AND media_type = 'photo' AND phash IS NULL ${libSql}`,
         )
-        .get(...libCond.params) as { cnt: number | bigint };
+        .get(...libCond.params, ...privCond.params) as { cnt: number | bigint };
       return { groups, missingPhashCount: toNumber(missingRow.cnt) };
     },
   );
@@ -299,14 +312,37 @@ export function registerTimelineRoutes(
     const q = req.query;
     const minMb = q.minMb ? Number(q.minMb) : 0;
     const limit = q.limit ? Number(q.limit) : 100;
-    return getStorageBreakdown(db, {
+    const allowed = getAllowedLibraryIds(req);
+    const role = getRequestAuth(req)?.currentUser?.role ?? 'admin';
+    const base = getStorageBreakdown(db, {
       mediaType:
         q.type === 'photo' || q.type === 'video' ? (q.type as MediaType) : undefined,
       minBytes: Number.isFinite(minMb) && minMb > 0 ? minMb * 1024 * 1024 : undefined,
       screenshotsOnly: q.screenshots === '1' || q.screenshots === 'true',
       rawOnly: q.rawOnly === '1' || q.rawOnly === 'true',
       limit: Number.isFinite(limit) && limit > 0 ? limit : 100,
-      allowedLibraryIds: getAllowedLibraryIds(req),
+      allowedLibraryIds: allowed,
     });
+    if (role === 'admin' && allowed === null) {
+      const retained = await scanRetainedBackupsInLibraries(db, null, 0);
+      return {
+        ...base,
+        retainedBytes: retained.retainedBytes,
+        retainedDirCount: retained.retainedDirCount,
+      };
+    }
+    return base;
+  });
+
+  app.post('/api/timeline/storage/clean-retained', async (req, reply) => {
+    const role = getRequestAuth(req)?.currentUser?.role ?? 'admin';
+    const allowed = getAllowedLibraryIds(req);
+    if (role !== 'admin' || allowed !== null) {
+      return reply.code(403).send({ error: '仅全局管理员可清理移动与旋转留底文件' });
+    }
+    if (!scanner) {
+      return reply.code(503).send({ error: '扫描服务未就绪' });
+    }
+    return await cleanRetainedBackupsInLibraries(db, scanner, 0);
   });
 }

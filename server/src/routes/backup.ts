@@ -9,12 +9,15 @@ import zlib from 'node:zlib';
 import { ZipArchive } from 'archiver';
 import type { FastifyInstance } from 'fastify';
 import type { DatabaseSync } from 'node:sqlite';
+import type { AiManager } from '../ai/aiManager.js';
 import type { AppConfig } from '../config.js';
 import { openDatabase, toNumber, withTransaction } from '../db/connection.js';
 import {
   recomputeOrganizedFlag,
+  reconcilePeopleIntegrity,
   syncMediaFtsBatch,
 } from '../db/queries.js';
+import { invalidateFolderTreeCache } from '../media/folderAlbums.js';
 import type {
   BackupArchiveItem,
   BackupProgress,
@@ -321,7 +324,13 @@ async function getBackupSummary(
         (SELECT COUNT(*) FROM albums) AS albums,
         (SELECT COUNT(*) FROM smart_albums) AS smart_albums,
         (SELECT COUNT(*) FROM tags) AS tags,
-        (SELECT COUNT(*) FROM people) AS people,
+        (
+          SELECT COUNT(DISTINCT p.id)
+          FROM people p
+          JOIN media_faces mf ON mf.person_id = p.id
+          JOIN media m ON m.id = mf.media_id
+          WHERE m.deleted_at IS NULL
+        ) AS people,
         (SELECT COUNT(*) FROM media_ai_state WHERE ocr_text IS NOT NULL AND TRIM(ocr_text) != '') AS ocr_text_cnt,
         (SELECT COUNT(*) FROM users) AS users
       `,
@@ -392,6 +401,8 @@ export async function createBackupArchive(
         DELETE FROM users;
         DELETE FROM shares;
         DELETE FROM revoked_sessions;
+        UPDATE folder_privacy SET lock_passcode_hash = NULL, lock_updated_at = NULL;
+        DELETE FROM folder_privacy WHERE is_excluded = 0;
         DELETE FROM app_settings
         WHERE key IN ('admin_passcode_hash', 'admin_require_on_loopback')
            OR key LIKE '%passcode%'
@@ -491,6 +502,7 @@ export async function restoreFromBackupZipFile(
   cfg: AppConfig,
   db: DatabaseSync,
   zipPath: string,
+  ai?: AiManager,
 ): Promise<BackupRestoreResult> {
   const tmpDbPath = path.join(
     cfg.tmpDir,
@@ -566,6 +578,11 @@ export async function restoreFromBackupZipFile(
     const backupFolderCovers = tables.includes('folder_covers')
       ? (backupDb
           .prepare('SELECT * FROM folder_covers')
+          .all() as Array<Record<string, unknown>>)
+      : [];
+    const backupExcludedFolders = tables.includes('folder_privacy')
+      ? (backupDb
+          .prepare('SELECT library_id, folder_path FROM folder_privacy WHERE is_excluded = 1')
           .all() as Array<Record<string, unknown>>)
       : [];
     const backupAiStates = tables.includes('media_ai_state')
@@ -771,6 +788,25 @@ export async function restoreFromBackupZipFile(
             : (oldToLiveMediaId.get(toNumber(fc.cover_media_id)) ?? null);
         if (libId && mappedCover) {
           insFc.run(libId, String(fc.folder_path), mappedCover, nowIso);
+        }
+      }
+
+      // Restore folder exclusion preferences without touching any active lock passcodes
+      if (backupExcludedFolders.length > 0) {
+        const insFp = db.prepare(
+          `
+          INSERT INTO folder_privacy (library_id, folder_path, is_excluded, lock_passcode_hash, lock_updated_at, updated_at)
+          VALUES (?, ?, 1, NULL, NULL, ?)
+          ON CONFLICT(library_id, folder_path) DO UPDATE SET
+            is_excluded = 1,
+            updated_at = excluded.updated_at
+          `,
+        );
+        for (const fp of backupExcludedFolders) {
+          const libId = libraryMap.get(toNumber(fp.library_id));
+          if (libId) {
+            insFp.run(libId, String(fp.folder_path ?? ''), nowIso);
+          }
         }
       }
 
@@ -993,7 +1029,11 @@ export async function restoreFromBackupZipFile(
       const touchedArr = Array.from(touchedMediaIds);
       recomputeOrganizedFlag(db, touchedArr);
       syncMediaFtsBatch(db, touchedArr);
+      reconcilePeopleIntegrity(db);
     });
+
+    invalidateFolderTreeCache();
+    ai?.reloadVectorsFromDb();
 
     return {
       ok: true,
@@ -1022,8 +1062,10 @@ export function registerBackupRoutes(
   app: FastifyInstance,
   cfg: AppConfig,
   db: DatabaseSync,
+  ai?: AiManager,
 ): void {
   let currentBackup: { controller: AbortController; progress: BackupProgress } | null = null;
+  let restoreInProgress = false;
   app.get('/api/backup/progress', async () => currentBackup?.progress ?? { active: false, phase: 'preparing', done: 0, total: 0 });
   app.post('/api/backup/cancel', async () => {
     currentBackup?.controller.abort(new Error('已取消备份'));
@@ -1034,7 +1076,7 @@ export function registerBackupRoutes(
   });
 
   app.post('/api/backup/create', async (_req, reply) => {
-    if (currentBackup) return reply.code(409).send({ error: '已有备份正在进行' });
+    if (currentBackup || restoreInProgress) return reply.code(409).send({ error: '已有备份或恢复正在进行' });
     const job = { controller: new AbortController(), progress: { active: true, phase: 'preparing', done: 0, total: 0 } as BackupProgress };
     currentBackup = job;
     try {
@@ -1089,6 +1131,10 @@ export function registerBackupRoutes(
   );
 
   app.post('/api/backup/restore', async (req, reply) => {
+    if (currentBackup || restoreInProgress) {
+      return reply.code(409).send({ error: '正在执行备份或恢复操作，请稍后重试' });
+    }
+    restoreInProgress = true;
     let uploadedTmpZip: string | null = null;
     try {
       let targetZipPath: string | null = null;
@@ -1104,11 +1150,19 @@ export function registerBackupRoutes(
               confirmed = v === '1' || v === 'true';
             }
           } else {
+            if (uploadedTmpZip) {
+              await fsPromises.rm(uploadedTmpZip, { force: true }).catch(() => {});
+            }
             uploadedTmpZip = path.join(
               cfg.tmpDir,
               `upload-backup-${crypto.randomUUID()}.zip`,
             );
             await pipeline(part.file, fs.createWriteStream(uploadedTmpZip));
+            if (part.file.truncated) {
+              return reply.code(413).send({
+                error: '上传的备份压缩包体积超限或传输中断，请重试',
+              });
+            }
             targetZipPath = uploadedTmpZip;
           }
         }
@@ -1144,12 +1198,13 @@ export function registerBackupRoutes(
           .send({ error: '请提供有效的 .zip 备份文件或选择本地备份' });
       }
 
-      return await restoreFromBackupZipFile(cfg, db, targetZipPath);
+      return await restoreFromBackupZipFile(cfg, db, targetZipPath, ai);
     } catch (err) {
       return reply
         .code(400)
         .send({ error: (err as Error).message || '恢复备份失败' });
     } finally {
+      restoreInProgress = false;
       if (uploadedTmpZip) {
         await fsPromises.rm(uploadedTmpZip, { force: true }).catch(() => {});
       }

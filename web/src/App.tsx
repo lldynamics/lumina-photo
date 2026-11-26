@@ -684,6 +684,7 @@ function MainAlbumApp() {
       targetLibraryId: number,
       targetFolderPath: string,
       mode: 'move' | 'copy' = 'move',
+      rethrowOnError = false,
     ) => {
       try {
         const res = await api.moveMediaToFolder(
@@ -694,9 +695,24 @@ function MainAlbumApp() {
         );
         setFolderTrees(res.libraries);
         setStats(res.stats);
-        setSelectedIds(new Set());
         setReloadToken((t) => t + 1);
         const destLabel = targetFolderPath || '图库根目录';
+        const okCount = mode === 'move' ? res.movedCount : res.copiedCount;
+        const actionVerb = mode === 'move' ? '移动到' : '复制到';
+        if (res.errors && res.errors.length > 0) {
+          if (okCount === 0) {
+            const errMsg = `未能${actionVerb}「${destLabel}」：${res.errors[0]}`;
+            showToast(errMsg);
+            if (rethrowOnError) throw new Error(errMsg);
+            return;
+          }
+          setSelectedIds(new Set());
+          showToast(
+            `已将 ${okCount} 项${actionVerb}「${destLabel}」，${res.errors.length} 项失败：${res.errors[0]}`,
+          );
+          return;
+        }
+        setSelectedIds(new Set());
         if (mode === 'move') {
           showToast(`已将 ${res.movedCount} 项移动到「${destLabel}」`);
         } else {
@@ -704,6 +720,7 @@ function MainAlbumApp() {
         }
       } catch (err) {
         showToast((err as Error).message);
+        if (rethrowOnError) throw err;
       }
     },
     [showToast],
@@ -730,6 +747,7 @@ function MainAlbumApp() {
     srcFolderPath: string,
     targetLibraryId: number,
     targetParentPath: string,
+    rethrowOnError = false,
   ) => {
     try {
       const res = await api.moveFolderAlbum(
@@ -755,6 +773,7 @@ function MainAlbumApp() {
       showToast(`已将文件夹移动到「${res.folderPath}」`);
     } catch (err) {
       showToast((err as Error).message);
+      if (rethrowOnError) throw err;
     }
   };
 
@@ -794,6 +813,12 @@ function MainAlbumApp() {
       );
       setFolderTrees(res.libraries);
       setStats(res.stats);
+      if (!res.removedDir) {
+        showToast(
+          '该文件夹内仍包含非相册文件（如文档或附属文件），为保护数据未删除物理目录',
+        );
+        return;
+      }
       if (
         section === 'folderAlbum' &&
         activeFolder?.libraryId === libraryId &&
@@ -805,28 +830,36 @@ function MainAlbumApp() {
       showToast('已删除空相册文件夹');
     } catch (err) {
       const msg = (err as Error).message;
+      if (msg.includes('非相册文件') || msg.includes('已加密')) {
+        showToast(msg);
+        return;
+      }
       if (
         confirm(
           `${msg}\n\n确认将该相册文件夹里的照片移入软件回收站吗？（原文件可在回收站恢复）`,
         )
       ) {
-        const res = await api.deleteFolderAlbum(
-          libraryId,
-          folderPath,
-          'trash_contents',
-        );
-        setFolderTrees(res.libraries);
-        setStats(res.stats);
-        setReloadToken((t) => t + 1);
-        if (
-          section === 'folderAlbum' &&
-          activeFolder?.libraryId === libraryId &&
-          (activeFolder.folderPath === folderPath ||
-            activeFolder.folderPath.startsWith(`${folderPath}/`))
-        ) {
-          setActiveFolder({ libraryId, folderPath: '' });
+        try {
+          const res = await api.deleteFolderAlbum(
+            libraryId,
+            folderPath,
+            'trash_contents',
+          );
+          setFolderTrees(res.libraries);
+          setStats(res.stats);
+          setReloadToken((t) => t + 1);
+          if (
+            section === 'folderAlbum' &&
+            activeFolder?.libraryId === libraryId &&
+            (activeFolder.folderPath === folderPath ||
+              activeFolder.folderPath.startsWith(`${folderPath}/`))
+          ) {
+            setActiveFolder({ libraryId, folderPath: '' });
+          }
+          showToast(`已将 ${res.trashedMediaCount} 项移入回收站`);
+        } catch (innerErr) {
+          showToast((innerErr as Error).message);
         }
-        showToast(`已将 ${res.trashedMediaCount} 项移入回收站`);
       }
     }
   };
@@ -860,14 +893,14 @@ function MainAlbumApp() {
         libraryId: activeFolder.libraryId,
         folderPath: activeFolder.folderPath,
         includeSubfolders,
-        defaultZipName: label.split('/').pop() || 'Lumina相册',
+        defaultZipName: label.split('/').pop() || '自己用的一个相册',
       });
     } else {
       setExportTarget({
         label: `${sectionTitle}（当前筛选结果，共 ${totalCount} 项）`,
         scope: 'filter',
         filter: baseFilter,
-        defaultZipName: sectionTitle || 'Lumina导出',
+        defaultZipName: sectionTitle || '自己用的一个相册导出',
       });
     }
     setExportOpen(true);
@@ -901,14 +934,31 @@ function MainAlbumApp() {
         isRoot: boolean;
       },
     ) => {
+      let isEffectiveLocked = false;
+      let isUnlocked = false;
+      if (target.isRoot || !target.folderPath) {
+        const lib = folderTrees.find((t) => t.libraryId === target.libraryId);
+        isEffectiveLocked = Boolean(lib?.isLocked);
+        isUnlocked = Boolean(lib?.isUnlocked);
+      } else {
+        const found = findFolderNode(
+          folderTrees,
+          target.libraryId,
+          target.folderPath,
+        );
+        isEffectiveLocked = Boolean(found?.node?.effectiveLocked);
+        isUnlocked = Boolean(found?.node?.isUnlocked);
+      }
       setContextMenu({
         kind: 'folder',
         x: e.clientX,
         y: e.clientY,
         ...target,
+        isEffectiveLocked,
+        isUnlocked,
       });
     },
-    [],
+    [folderTrees],
   );
 
   const openFolderPrivacy = useCallback(
@@ -991,6 +1041,14 @@ function MainAlbumApp() {
           }),
         onOpenFolderPicker: setFolderPickerState,
         onOpenFolderPrivacy: openFolderPrivacy,
+        onSelectFolderAlbum: (libraryId, folderPath) => {
+          setSection('folderAlbum');
+          setActiveFolder({ libraryId, folderPath });
+          setActiveAlbumId(null);
+          setActivePersonId(null);
+          setActiveSmartAlbumId(null);
+          setActiveTagPath(null);
+        },
         onDeleteFolderAlbum: (libraryId, folderPath) =>
           void handleDeleteFolderAlbum(libraryId, folderPath),
         onRunBatch: runBatchOnIds,
@@ -1204,13 +1262,17 @@ function MainAlbumApp() {
         onCreateSmartAlbum={() => setSmartAlbumModalState({ editing: null })}
         onEditSmartAlbum={(sa) => setSmartAlbumModalState({ editing: sa })}
         onDeleteSmartAlbum={async (id) => {
-          const res = await api.deleteSmartAlbum(id);
-          setSmartAlbums(res.smartAlbums);
-          if (section === 'smartAlbum' && activeSmartAlbumId === id) {
-            setSection('all');
-            setActiveSmartAlbumId(null);
+          try {
+            const res = await api.deleteSmartAlbum(id);
+            setSmartAlbums(res.smartAlbums);
+            if (section === 'smartAlbum' && activeSmartAlbumId === id) {
+              setSection('all');
+              setActiveSmartAlbumId(null);
+            }
+            showToast('已删除智能相册');
+          } catch (err) {
+            showToast((err as Error).message);
           }
-          showToast('已删除智能相册');
         }}
         onSelectFolderAlbum={(libraryId, folderPath) => {
           setSection('folderAlbum');
@@ -1330,24 +1392,42 @@ function MainAlbumApp() {
         }}
         onRenameTag={async (id, newPath) => {
           try {
-            const res = await api.updateTag(id, { path: newPath });
+            const prevTag = tags.find((t) => t.id === id);
+            const cleanNew = newPath.trim().replace(/^\/+|\/+$/g, '').replace(/\/+/g, '/');
+            const res = await api.updateTag(id, { path: cleanNew });
             setTags(res.tags);
-            if (section === 'tag') {
-              setActiveTagPath(newPath);
+            if (section === 'tag' && activeTagPath && prevTag) {
+              if (activeTagPath === prevTag.path) {
+                setActiveTagPath(cleanNew);
+              } else if (activeTagPath.startsWith(`${prevTag.path}/`)) {
+                setActiveTagPath(`${cleanNew}${activeTagPath.slice(prevTag.path.length)}`);
+              }
             }
-            showToast(`标签已更新为 #${newPath}`);
+            showToast(`标签已更新为 #${cleanNew}`);
           } catch (err) {
             showToast((err as Error).message);
           }
         }}
         onDeleteTag={async (id) => {
-          const res = await api.deleteTag(id);
-          setTags(res.tags);
-          if (section === 'tag') {
-            setSection('all');
-            setActiveTagPath(null);
+          try {
+            const prevTag = tags.find((t) => t.id === id);
+            const res = await api.deleteTag(id);
+            setTags(res.tags);
+            if (
+              section === 'tag' &&
+              activeTagPath &&
+              prevTag &&
+              (activeTagPath === prevTag.path ||
+                activeTagPath.startsWith(`${prevTag.path}/`))
+            ) {
+              setSection('all');
+              setActiveTagPath(null);
+            }
+            void refreshLightweightStatsAndTags();
+            showToast('已删除标签');
+          } catch (err) {
+            showToast((err as Error).message);
           }
-          void refreshLightweightStatsAndTags();
         }}
         onOpenImport={() => setImportOpen(true)}
         onOpenExport={openExportForCurrentView}
@@ -1620,6 +1700,12 @@ function MainAlbumApp() {
               }}
               onTotalCountChange={setTotalCount}
               readOnly={!canEdit}
+              isAdmin={isAdmin}
+              onNotify={showToast}
+              onReloadRequest={() => {
+                setReloadToken((t) => t + 1);
+                void refreshMetadata();
+              }}
             />
           </Suspense>
         ) : section === 'trash' ? (
@@ -1994,6 +2080,7 @@ function MainAlbumApp() {
                   folderPickerState.folderPath,
                   targetLibId,
                   targetPath,
+                  true,
                 );
               } else {
                 await handleMoveMediaToFolder(
@@ -2001,6 +2088,7 @@ function MainAlbumApp() {
                   targetLibId,
                   targetPath,
                   folderPickerState.kind === 'copyMedia' ? 'copy' : 'move',
+                  true,
                 );
               }
             }}

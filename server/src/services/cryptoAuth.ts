@@ -66,6 +66,42 @@ export function isLoopbackAddress(ip: string | undefined): boolean {
   );
 }
 
+export function extractClientIp(
+  req: {
+    ip?: string;
+    headers: Record<string, string | string[] | undefined>;
+    raw: { socket: { remoteAddress?: string } };
+  },
+  cfg: { trustProxy: boolean },
+): string {
+  const remote = req.raw.socket.remoteAddress || req.ip || 'unknown';
+  if (cfg.trustProxy || isLoopbackAddress(remote)) {
+    const xff = req.headers['x-forwarded-for'];
+    const rawXff = Array.isArray(xff) ? xff.join(',') : xff;
+    if (rawXff) {
+      const hops = rawXff
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      for (let i = hops.length - 1; i >= 0; i--) {
+        if (!isLoopbackAddress(hops[i])) {
+          return hops[i];
+        }
+      }
+      if (hops.length > 0) {
+        return hops[hops.length - 1];
+      }
+    }
+    const cfIp = req.headers['cf-connecting-ip'];
+    const rawCf = Array.isArray(cfIp) ? cfIp[0] : cfIp;
+    if (rawCf?.trim()) return rawCf.trim();
+    const realIp = req.headers['x-real-ip'];
+    const rawReal = Array.isArray(realIp) ? realIp[0] : realIp;
+    if (rawReal?.trim()) return rawReal.trim();
+  }
+  return remote;
+}
+
 export class SlidingWindowRateLimiter {
   private buckets = new Map<string, number[]>();
   private maxAttempts: number;

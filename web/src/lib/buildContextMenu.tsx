@@ -36,6 +36,8 @@ export type AppContextMenuState =
       folderPath: string;
       name: string;
       isRoot: boolean;
+      isEffectiveLocked?: boolean;
+      isUnlocked?: boolean;
     }
   | {
       kind: 'media';
@@ -83,6 +85,7 @@ export interface BuildContextMenuArgs {
   ) => void;
   onOpenFolderPicker: (state: AppFolderPickerState) => void;
   onOpenFolderPrivacy?: (libraryId: number, folderPath: string) => void;
+  onSelectFolderAlbum?: (libraryId: number, folderPath: string) => void;
   onDeleteFolderAlbum: (libraryId: number, folderPath: string) => void;
   onRunBatch: (
     ids: number[],
@@ -113,6 +116,7 @@ export function buildContextMenuView(
     onTriggerSidebarRename,
     onOpenFolderPicker,
     onOpenFolderPrivacy,
+    onSelectFolderAlbum,
     onDeleteFolderAlbum,
     onRunBatch,
     onRequestPurge,
@@ -129,6 +133,33 @@ export function buildContextMenuView(
     const header = contextMenu.isRoot
       ? `图库：${contextMenu.name}`
       : `相册：${contextMenu.name}`;
+    const isSealedLock = Boolean(
+      contextMenu.isEffectiveLocked && !contextMenu.isUnlocked,
+    );
+
+    if (isSealedLock) {
+      const sealedEntries: ContextMenuEntry[] = [];
+      if (onSelectFolderAlbum) {
+        sealedEntries.push({
+          type: 'item',
+          label: '输入密码解锁此文件夹...',
+          icon: <Lock className="w-3.5 h-3.5 text-amber-500" />,
+          onClick: () =>
+            onSelectFolderAlbum(contextMenu.libraryId, contextMenu.folderPath),
+        });
+      }
+      if (isAdmin && onOpenFolderPrivacy) {
+        if (sealedEntries.length > 0) sealedEntries.push({ type: 'divider' });
+        sealedEntries.push({
+          type: 'item',
+          label: '隐私加密 / 排除显示设置...',
+          icon: <Lock className="w-3.5 h-3.5 text-amber-500" />,
+          onClick: () =>
+            onOpenFolderPrivacy(contextMenu.libraryId, contextMenu.folderPath),
+        });
+      }
+      return sealedEntries.length > 0 ? { header, entries: sealedEntries } : null;
+    }
 
     if (!canEdit) {
       return {
@@ -230,7 +261,10 @@ export function buildContextMenuView(
             defaultZipName: contextMenu.name,
           }),
       },
-      {
+    );
+
+    if (!contextMenu.isEffectiveLocked) {
+      entries.push({
         type: 'item',
         label: '局域网分享此相册...',
         icon: <Share2 className="w-3.5 h-3.5 text-emerald-500" />,
@@ -241,8 +275,8 @@ export function buildContextMenuView(
             folderPath: contextMenu.folderPath,
             defaultTitle: contextMenu.name,
           }),
-      },
-    );
+      });
+    }
 
     if (!contextMenu.isRoot) {
       entries.push(

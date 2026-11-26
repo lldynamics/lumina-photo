@@ -20,6 +20,7 @@ import {
   normalizeFolderPath,
   resolveSafeFolderDir,
 } from './folderAlbums.js';
+import { getBlockingLockForFolder } from './folderPrivacy.js';
 import { livePairCandidates, classifyFile, isIgnoredEntryName, type ClassifiedFile } from './formats.js';
 import { computeQuickHash } from './hash.js';
 import { extractMediaMetadata } from './metadata.js';
@@ -306,6 +307,7 @@ export async function importStagedUploads(
       save: (unit: string, value: { bytes: number; duplicate?: ImportDuplicateInfo }) => void;
     };
     allowedLibraryIds?: number[] | null;
+    unlockedFolderKeys?: ReadonlySet<string>;
     libraryId: number;
     targetFolderPath: string;
     organizeByMonth: boolean;
@@ -323,6 +325,16 @@ export async function importStagedUploads(
 
   if (!rootAvailable(libRow.root_path, libRow.root_identity)) throw new FolderOperationError('图库原磁盘未连接', 409);
   const baseTargetFolder = normalizeFolderPath(opts.targetFolderPath || '');
+  if (
+    getBlockingLockForFolder(
+      db,
+      opts.libraryId,
+      baseTargetFolder,
+      opts.unlockedFolderKeys,
+    )
+  ) {
+    throw new FolderOperationError('目标文件夹已加密，请先解锁后再导入照片', 403);
+  }
   const { units, unsupportedCount, unsupportedFiles, errors } = await discoverUnitsInDirectory(
     opts.stagingDir,
   );
@@ -350,6 +362,7 @@ export async function importStagedUploads(
           quickHash,
           unit.liveAbsPath,
           opts.allowedLibraryIds,
+          opts.unlockedFolderKeys,
         );
 
         const { contentKey, match: duplicateMatch } = dedup;
@@ -378,9 +391,19 @@ export async function importStagedUploads(
           const sub = `${year}/${meta.monthBucket}`;
           destFolder = destFolder ? `${destFolder}/${sub}` : sub;
         }
+        if (
+          getBlockingLockForFolder(
+            db,
+            opts.libraryId,
+            destFolder,
+            opts.unlockedFolderKeys,
+          )
+        ) {
+          throw new Error(`目标归档子目录「${destFolder}」已加密，请先解锁`);
+        }
 
         importedBytes += await storeImportedUnit(db, unit, opts.libraryId, libRow.root_path,
-          destFolder, 'move', quickHash, contentKey, () => {
+          destFolder, 'copy', quickHash, contentKey, () => {
             if (!rootAvailable(libRow.root_path, libRow.root_identity)) throw new Error('目标图库已断开');
           }, meta, bytes => opts.receipts?.save(unit.relPath, { bytes }));
         importedCount++;
@@ -414,6 +437,7 @@ export async function previewLocalImport(
   db: DatabaseSync,
   sourcePathRaw: string,
   allowedRoots: string[] = [],
+  unlockedFolderKeys?: ReadonlySet<string>,
 ): Promise<LocalImportPreview> {
   const sourcePath = path.resolve(sourcePathRaw.trim());
   if (!isPathWithinAllowedRoots(sourcePath, allowedRoots)) {
@@ -443,7 +467,15 @@ export async function previewLocalImport(
   let duplicateBytes = 0;
 
   for (const unit of units) {
-    const dedup = await findDuplicateInLibrary(db, unit.absPath, unit.stat.size, undefined, unit.liveAbsPath)
+    const dedup = await findDuplicateInLibrary(
+      db,
+      unit.absPath,
+      unit.stat.size,
+      undefined,
+      unit.liveAbsPath,
+      undefined,
+      unlockedFolderKeys,
+    )
       .catch((err: Error) => {
         errors.push(`${unit.relPath} — ${err.message}`);
         return null;
@@ -519,6 +551,7 @@ export async function executeLocalImport(
     structureMode: 'flat' | 'preserve' | 'by_month';
     transferMode: 'copy' | 'move';
     skipDuplicates: boolean;
+    unlockedFolderKeys?: ReadonlySet<string>;
   },
 ): Promise<ImportResult> {
   const sourcePath = path.resolve(opts.sourcePath.trim());
@@ -541,6 +574,16 @@ export async function executeLocalImport(
 
   if (!rootAvailable(libRow.root_path, libRow.root_identity)) throw new FolderOperationError('图库原磁盘未连接', 409);
   const baseTargetFolder = normalizeFolderPath(opts.targetFolderPath || '');
+  if (
+    getBlockingLockForFolder(
+      db,
+      opts.targetLibraryId,
+      baseTargetFolder,
+      opts.unlockedFolderKeys,
+    )
+  ) {
+    throw new FolderOperationError('目标文件夹已加密，请先解锁后再导入照片', 403);
+  }
   const baseDestDir = resolveSafeFolderDir(libRow.root_path, baseTargetFolder);
 
   if (
@@ -582,6 +625,8 @@ export async function executeLocalImport(
           unit.stat.size,
           quickHash,
           unit.liveAbsPath,
+          undefined,
+          opts.unlockedFolderKeys,
         );
 
         const { contentKey, match: duplicateMatch } = dedup;
@@ -615,6 +660,16 @@ export async function executeLocalImport(
           const year = meta.monthBucket.slice(0, 4);
           const sub = `${year}/${meta.monthBucket}`;
           destFolder = destFolder ? `${destFolder}/${sub}` : sub;
+        }
+        if (
+          getBlockingLockForFolder(
+            db,
+            opts.targetLibraryId,
+            destFolder,
+            opts.unlockedFolderKeys,
+          )
+        ) {
+          throw new Error(`目标归档子目录「${destFolder}」已加密，请先解锁`);
         }
 
         importedBytes += await storeImportedUnit(db, unit, opts.targetLibraryId, libRow.root_path,

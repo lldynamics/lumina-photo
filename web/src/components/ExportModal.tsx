@@ -48,7 +48,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   const [preserveFolders, setPreserveFolders] = useState(true);
   const [includeLiveVideo, setIncludeLiveVideo] = useState(true);
 
-  const [zipName, setZipName] = useState('Lumina导出照片');
+  const [zipName, setZipName] = useState('自己用的一个相册导出');
   const [preparingZip, setPreparingZip] = useState(false);
 
   const [browse, setBrowse] = useState<DirBrowseResponse | null>(null);
@@ -61,7 +61,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
   useEffect(() => {
     if (!open || !target) return;
-    setZipName(target.defaultZipName || 'Lumina导出照片');
+    setZipName(target.defaultZipName || '自己用的一个相册导出');
     setError(null);
     setLocalResult(null);
     setSubfolderName('');
@@ -101,7 +101,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     setError(null);
     try {
       const res = await api.prepareZipExport(
-        buildRequest({ zipName: zipName.trim() || 'Lumina导出照片' }),
+        buildRequest({ zipName: zipName.trim() || '自己用的一个相册导出' }),
       );
       const a = document.createElement('a');
       a.href = res.downloadUrl;

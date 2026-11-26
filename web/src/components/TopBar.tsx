@@ -307,7 +307,9 @@ export const TopBar: React.FC<TopBarProps> = ({
                         <button
                           key={`${f.libraryId}::${f.folderPath}`}
                           type="button"
+                          disabled={Boolean(f.isLockedSealed)}
                           onClick={async () => {
+                            if (f.isLockedSealed) return;
                             await onMoveSelectionToFolder(
                               f.libraryId,
                               f.folderPath,
@@ -315,12 +317,17 @@ export const TopBar: React.FC<TopBarProps> = ({
                             );
                             setActivePopover(null);
                           }}
-                          className="w-full text-left px-2 py-1.5 text-xs hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded whitespace-pre truncate flex items-center justify-between"
+                          className="w-full text-left px-2 py-1.5 text-xs hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded whitespace-pre truncate flex items-center justify-between disabled:opacity-40 disabled:pointer-events-none"
                         >
-                          <span className="truncate">{f.label}</span>
-                          <span className="text-[10px] text-zinc-400">
-                            {f.totalCount}
+                          <span className="truncate">
+                            {f.label}
+                            {f.isLockedSealed ? '（🔒 需先解锁）' : ''}
                           </span>
+                          {!f.isLockedSealed && (
+                            <span className="text-[10px] text-zinc-400">
+                              {f.totalCount}
+                            </span>
+                          )}
                         </button>
                       ))}
                     </div>

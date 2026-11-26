@@ -271,6 +271,13 @@ export function initSchema(db: DatabaseSync): void {
     addColumn('libraries', 'stable_id', 'TEXT');
     addColumn('libraries', 'root_identity', 'TEXT');
     db.exec(`
+      CREATE TABLE IF NOT EXISTS deleted_folders (
+        library_id INTEGER NOT NULL,
+        folder_path TEXT NOT NULL,
+        deleted_at TEXT NOT NULL,
+        PRIMARY KEY (library_id, folder_path),
+        FOREIGN KEY (library_id) REFERENCES libraries(id) ON DELETE CASCADE
+      );
       CREATE TABLE IF NOT EXISTS live_fingerprints (
         media_id INTEGER PRIMARY KEY REFERENCES media(id) ON DELETE CASCADE,
         motion_hash TEXT NOT NULL, mtime_ms REAL NOT NULL

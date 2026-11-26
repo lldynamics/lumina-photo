@@ -8,9 +8,10 @@ import type { DatabaseSync } from 'node:sqlite';
 import { watch } from 'chokidar';
 import type { AppConfig } from '../config.js';
 import { toNumber, withTransaction } from '../db/connection.js';
-import { syncMediaFtsBatch } from '../db/queries.js';
+import { reconcilePeopleIntegrity, syncMediaFtsBatch } from '../db/queries.js';
 import type { ScanProgressEvent } from '../types.js';
 import { invalidateFolderTreeCache } from './folderAlbums.js';
+import { isPathCoveredByRule, listFolderPrivacyRules } from './folderPrivacy.js';
 import { livePairCandidates, classifyFile, isIgnoredEntryName, type ClassifiedFile } from './formats.js';
 import { rootAttachment, rootAvailable, rootIdentity } from './libraryRoots.js';
 import { resolveSafeMediaPath } from './osTrash.js';
@@ -104,6 +105,7 @@ export class ScanManager extends EventEmitter {
   private thumbRequested = false;
   private lastEmitTs = 0;
   private phashBackfillCursor = 0;
+  private currentFileContext: { libraryId: number; folderPath: string } | null = null;
 
   private state: ScanProgressEvent = {
     status: 'idle',
@@ -126,7 +128,29 @@ export class ScanManager extends EventEmitter {
   }
 
   getState(): ScanProgressEvent {
-    return { ...this.state, watchWarnings: Array.from(this.watchWarnings, ([libraryId, message]) => ({ libraryId, message })) };
+    const watchWarnings = Array.from(
+      this.watchWarnings,
+      ([libraryId, message]) => ({ libraryId, message }),
+    );
+    let currentFile = this.state.currentFile;
+    if (currentFile && this.currentFileContext) {
+      const ctx = this.currentFileContext;
+      const rules = listFolderPrivacyRules(this.db);
+      if (
+        rules.some(
+          (r) =>
+            (r.isLocked || r.isExcluded) &&
+            isPathCoveredByRule(ctx.libraryId, ctx.folderPath, r),
+        )
+      ) {
+        currentFile = null;
+      }
+    }
+    return { ...this.state, currentFile, watchWarnings };
+  }
+
+  getCurrentFileLibraryId(): number | null {
+    return this.currentFileContext?.libraryId ?? this.state.libraryId;
   }
 
   suppressWatch(libraryId: number, durationMs = 3000): void {
@@ -657,6 +681,7 @@ export class ScanManager extends EventEmitter {
         seenRelPaths.add(f.relPath);
         this.state.scannedFiles++;
         this.state.currentFile = f.filename;
+        this.currentFileContext = { libraryId, folderPath: f.folderPath };
 
         const mtimeMs = Math.round(f.stat.mtimeMs);
         const prev = existingMap.get(f.relPath);
@@ -1019,6 +1044,9 @@ export class ScanManager extends EventEmitter {
           }
         }
         syncMediaFtsBatch(this.db, [...insertedIds, ...updatedExistingIds]);
+        if (updatedExistingIds.length > 0) {
+          reconcilePeopleIntegrity(this.db);
+        }
       });
 
       if (updatedExistingIds.length > 0) {
@@ -1070,6 +1098,7 @@ export class ScanManager extends EventEmitter {
           delStmt.run(id);
           this.state.removedFiles++;
         }
+        reconcilePeopleIntegrity(this.db);
       });
       await Promise.all(
         pruneIds.map((id) =>
@@ -1128,6 +1157,7 @@ export class ScanManager extends EventEmitter {
           thumbnailsTotal: initialTotal,
           currentFile: null,
         };
+        this.currentFileContext = null;
         this.emitProgress(true);
 
         const updateReadyStmt = this.db.prepare(`
@@ -1153,7 +1183,7 @@ export class ScanManager extends EventEmitter {
               ? this.db
                   .prepare(
                     `
-                    SELECT m.id, l.root_path, l.root_identity, m.rel_path, m.filename, m.ext, m.media_type, m.duration_ms, m.width, m.height
+                    SELECT m.id, m.library_id, m.folder_path, l.root_path, l.root_identity, m.rel_path, m.filename, m.ext, m.media_type, m.duration_ms, m.width, m.height
                     FROM media m
                     JOIN libraries l ON l.id = m.library_id
                     WHERE m.thumb_ready = 0
@@ -1168,7 +1198,7 @@ export class ScanManager extends EventEmitter {
               : this.db
                   .prepare(
                     `
-                    SELECT m.id, l.root_path, l.root_identity, m.rel_path, m.filename, m.ext, m.media_type, m.duration_ms, m.width, m.height
+                    SELECT m.id, m.library_id, m.folder_path, l.root_path, l.root_identity, m.rel_path, m.filename, m.ext, m.media_type, m.duration_ms, m.width, m.height
                     FROM media m
                     JOIN libraries l ON l.id = m.library_id
                     WHERE m.thumb_ready = 0
@@ -1181,6 +1211,8 @@ export class ScanManager extends EventEmitter {
                   .all(BATCH_SIZE)
           ) as Array<{
             id: number | bigint;
+            library_id: number | bigint;
+            folder_path: string;
             root_path: string;
             root_identity: string | null;
             rel_path: string;
@@ -1211,6 +1243,10 @@ export class ScanManager extends EventEmitter {
                 continue;
               }
               this.state.currentFile = row.filename;
+              this.currentFileContext = {
+                libraryId: toNumber(row.library_id),
+                folderPath: String(row.folder_path ?? ''),
+              };
               try {
                 const absPath = resolveSafeMediaPath(row.root_path, row.rel_path);
                 const res = await generateSmallThumbAndHash(

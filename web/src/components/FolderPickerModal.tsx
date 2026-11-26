@@ -57,7 +57,7 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
     setQuery('');
     setNewFolderName('');
     const firstValid = flatOptions.find(
-      (o) => !isExcluded(o.libraryId, o.folderPath),
+      (o) => !isExcluded(o.libraryId, o.folderPath) && !o.isLockedSealed,
     );
     setSelectedKey(
       firstValid ? `${firstValid.libraryId}::${firstValid.folderPath}` : '',
@@ -117,6 +117,8 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
     try {
       await onConfirm(sel.libraryId, sel.folderPath);
       onClose();
+    } catch {
+      // Error toast is displayed by parent; keep modal open so user can pick another target
     } finally {
       setSubmitting(false);
     }
@@ -159,7 +161,9 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
           <div className="max-h-64 overflow-y-auto rounded-xl border border-zinc-200 dark:border-zinc-800 divide-y divide-zinc-100 dark:divide-zinc-800/60">
             {filtered.map((opt) => {
               const key = `${opt.libraryId}::${opt.folderPath}`;
-              const disabled = isExcluded(opt.libraryId, opt.folderPath);
+              const disabled =
+                isExcluded(opt.libraryId, opt.folderPath) ||
+                Boolean(opt.isLockedSealed);
               const selected = selectedKey === key;
 
               return (
@@ -171,9 +175,9 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
                   onDoubleClick={() => {
                     if (!disabled) {
                       setSelectedKey(key);
-                      void onConfirm(opt.libraryId, opt.folderPath).then(
-                        onClose,
-                      );
+                      void onConfirm(opt.libraryId, opt.folderPath)
+                        .then(onClose)
+                        .catch(() => {});
                     }
                   }}
                   className={`w-full px-3 py-2 text-left flex items-center justify-between gap-2 transition-colors disabled:opacity-35 ${
@@ -188,11 +192,16 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
                     ) : (
                       <Folder className="w-3.5 h-3.5 text-blue-500 shrink-0" />
                     )}
-                    <span className="truncate">{opt.label}</span>
+                    <span className="truncate">
+                      {opt.label}
+                      {opt.isLockedSealed ? '（🔒 需先解锁）' : ''}
+                    </span>
                   </span>
-                  <span className="text-[10px] text-zinc-400 tabular-nums shrink-0">
-                    {opt.totalCount}
-                  </span>
+                  {!opt.isLockedSealed && (
+                    <span className="text-[10px] text-zinc-400 tabular-nums shrink-0">
+                      {opt.totalCount}
+                    </span>
+                  )}
                 </button>
               );
             })}

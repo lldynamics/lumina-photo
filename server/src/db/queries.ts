@@ -881,15 +881,45 @@ export function sanitizeMediaFilterParams(raw: unknown): MediaFilterParams {
   return out;
 }
 
+const smartAlbumsCacheMap = new WeakMap<
+  DatabaseSync,
+  Map<string, { revKey: string; items: SmartAlbum[] }>
+>();
+
 export function getSmartAlbumsWithCounts(
   db: DatabaseSync,
   allowedLibraryIds?: number[] | null,
 ): SmartAlbum[] {
+  const scopeKey = Array.isArray(allowedLibraryIds)
+    ? `scoped:${JSON.stringify([...allowedLibraryIds].sort((a, b) => a - b))}`
+    : 'global';
+  let revKey = '';
+  try {
+    const ver = db
+      .prepare('SELECT total_changes() AS writes, data_version AS rev FROM pragma_data_version')
+      .get() as { writes: number | bigint; rev: number | bigint } | undefined;
+    if (ver) revKey = `${ver.writes}:${ver.rev}`;
+  } catch {
+    revKey = '';
+  }
+
+  let dbCache = smartAlbumsCacheMap.get(db);
+  if (!dbCache) {
+    dbCache = new Map();
+    smartAlbumsCacheMap.set(db, dbCache);
+  }
+  if (revKey) {
+    const hit = dbCache.get(scopeKey);
+    if (hit && hit.revKey === revKey) {
+      return hit.items.map((it) => ({ ...it, filter: { ...it.filter } }));
+    }
+  }
+
   const rows = db
     .prepare('SELECT * FROM smart_albums ORDER BY sort_order ASC, id ASC')
     .all() as Array<Record<string, unknown>>;
 
-  return rows.map((r) => {
+  const computed = rows.map((r) => {
     let filter: MediaFilterParams = {};
     try {
       filter = sanitizeMediaFilterParams(JSON.parse(String(r.filter_json)));
@@ -914,6 +944,11 @@ export function getSmartAlbumsWithCounts(
       updatedAt: String(r.updated_at),
     };
   });
+
+  if (revKey) {
+    dbCache.set(scopeKey, { revKey, items: computed });
+  }
+  return computed;
 }
 
 export function getMediaDetail(
@@ -1291,6 +1326,34 @@ export function recomputeOrganizedFlag(
       `,
     ).run(...slice);
   }
+}
+
+export function reconcilePeopleIntegrity(db: DatabaseSync): void {
+  db.exec(`
+    UPDATE people
+    SET cover_face_id = (
+      SELECT mf.id
+      FROM media_faces mf
+      JOIN media m ON m.id = mf.media_id
+      WHERE mf.person_id = people.id AND m.deleted_at IS NULL
+      ORDER BY mf.confidence DESC, mf.id ASC
+      LIMIT 1
+    )
+    WHERE cover_face_id IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1
+        FROM media_faces mf
+        JOIN media m ON m.id = mf.media_id
+        WHERE mf.id = people.cover_face_id
+          AND mf.person_id = people.id
+          AND m.deleted_at IS NULL
+      );
+
+    DELETE FROM people
+    WHERE NOT EXISTS (
+      SELECT 1 FROM media_faces mf WHERE mf.person_id = people.id
+    );
+  `);
 }
 
 export function syncMediaFtsBatch(db: DatabaseSync, mediaIds: number[]): void {

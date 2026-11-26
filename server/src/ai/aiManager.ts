@@ -20,6 +20,7 @@ import { rootAvailable } from '../media/libraryRoots.js';
 import {
   buildPrivacySqlCondition,
   isMediaIdLockedForRequest,
+  listFolderPrivacyRules,
 } from '../media/folderPrivacy.js';
 import { resolveSafeMediaPath } from '../media/osTrash.js';
 import type {
@@ -73,6 +74,7 @@ interface InternalTaskState {
   pending: number;
   currentFile: string | null;
   currentFileLibraryId: number | null;
+  currentFileFolderPath?: string | null;
   lastError: string | null;
   downloadProgress: number | null;
   downloadMessage: string | null;
@@ -264,13 +266,21 @@ export class AiManager {
       'm.library_id',
       allowedLibraryIds,
     );
-    const libSql = libCond.clause ? `AND ${libCond.clause}` : '';
+    const privCond = buildPrivacySqlCondition(this.db, 'm', { kind: 'global' });
+    const libSql = [
+      libCond.clause ? `AND ${libCond.clause}` : '',
+      privCond.clause ? `AND ${privCond.clause}` : '',
+    ]
+      .filter(Boolean)
+      .join(' ');
+    const scopeParams = [...libCond.params, ...privCond.params];
+    const privacyRules = listFolderPrivacyRules(this.db);
 
     const photoRow = this.db
       .prepare(
         `SELECT COUNT(*) AS cnt FROM media m WHERE m.deleted_at IS NULL AND m.media_type = 'photo' ${libSql}`,
       )
-      .get(...libCond.params) as { cnt: number | bigint };
+      .get(...scopeParams) as { cnt: number | bigint };
     const totalPhotos = toNumber(photoRow.cnt);
 
     const clipDoneRow = this.db
@@ -282,7 +292,7 @@ export class AiManager {
         WHERE m.deleted_at IS NULL AND m.media_type = 'photo' AND ai.clip_done = 1 ${libSql}
         `,
       )
-      .get(...libCond.params) as { cnt: number | bigint };
+      .get(...scopeParams) as { cnt: number | bigint };
     const clipDone = toNumber(clipDoneRow.cnt);
 
     const faceDoneRow = this.db
@@ -294,7 +304,7 @@ export class AiManager {
         WHERE m.deleted_at IS NULL AND m.media_type = 'photo' AND ai.face_done = 1 ${libSql}
         `,
       )
-      .get(...libCond.params) as { cnt: number | bigint };
+      .get(...scopeParams) as { cnt: number | bigint };
     const faceDone = toNumber(faceDoneRow.cnt);
 
     const ocrFilterSql =
@@ -313,7 +323,7 @@ export class AiManager {
         WHERE ${ocrFilterSql}
         `,
       )
-      .get(...libCond.params) as {
+      .get(...scopeParams) as {
       total_eligible: number | bigint;
       done_cnt: number | bigint;
     };
@@ -327,7 +337,7 @@ export class AiManager {
         WHERE m.deleted_at IS NULL AND ai.ocr_text IS NOT NULL AND TRIM(ai.ocr_text) != '' ${libSql}
         `,
       )
-      .get(...libCond.params) as { cnt: number | bigint };
+      .get(...scopeParams) as { cnt: number | bigint };
 
     const peopleRow = this.db
       .prepare(
@@ -339,7 +349,7 @@ export class AiManager {
         WHERE m.deleted_at IS NULL AND p.is_hidden = 0 ${libSql}
         `,
       )
-      .get(...libCond.params) as { cnt: number | bigint };
+      .get(...scopeParams) as { cnt: number | bigint };
 
     const facesRow = this.db
       .prepare(
@@ -350,7 +360,7 @@ export class AiManager {
         WHERE m.deleted_at IS NULL ${libSql}
         `,
       )
-      .get(...libCond.params) as { cnt: number | bigint };
+      .get(...scopeParams) as { cnt: number | bigint };
 
     const ocrTotal = toNumber(ocrTotals.total_eligible);
     const ocrDone = toNumber(ocrTotals.done_cnt);
@@ -363,12 +373,24 @@ export class AiManager {
     ): AiTaskStatus => {
       const st = this.tasks[key];
       const pending = Math.max(0, total - processed);
-      const visibleCurrentFile = Array.isArray(allowedLibraryIds)
-        ? st.currentFileLibraryId !== null &&
-          allowedLibraryIds.includes(st.currentFileLibraryId)
-          ? st.currentFile
-          : null
-        : st.currentFile;
+      const isPrivateFile =
+        st.currentFileLibraryId !== null &&
+        privacyRules.some(
+          (r) =>
+            (r.isLocked || r.isExcluded) &&
+            r.libraryId === st.currentFileLibraryId &&
+            (r.folderPath === '' ||
+              st.currentFileFolderPath === r.folderPath ||
+              Boolean(st.currentFileFolderPath?.startsWith(`${r.folderPath}/`))),
+        );
+      const visibleCurrentFile = isPrivateFile
+        ? null
+        : Array.isArray(allowedLibraryIds)
+          ? st.currentFileLibraryId !== null &&
+            allowedLibraryIds.includes(st.currentFileLibraryId)
+            ? st.currentFile
+            : null
+          : st.currentFile;
       return {
         key,
         running: st.running,
@@ -577,6 +599,7 @@ export class AiManager {
           this.tasks[k].running = false;
           this.tasks[k].currentFile = null;
           this.tasks[k].currentFileLibraryId = null;
+          this.tasks[k].currentFileFolderPath = null;
           this.tasks[k].downloadProgress = null;
           this.tasks[k].downloadMessage = null;
           this.tasks[k].promise = null;
@@ -636,6 +659,7 @@ export class AiManager {
   ): Array<{
     id: number;
     libraryId: number;
+    folderPath: string;
     filename: string;
     rootPath: string;
     rootIdentity: string | null;
@@ -665,7 +689,7 @@ export class AiManager {
     const rows = this.db
       .prepare(
         `
-        SELECT m.id, m.library_id, m.filename, l.root_path, l.root_identity, m.rel_path, m.ext
+        SELECT m.id, m.library_id, m.folder_path, m.filename, l.root_path, l.root_identity, m.rel_path, m.ext
         FROM media m
         JOIN libraries l ON l.id = m.library_id
         LEFT JOIN media_ai_state ai ON ai.media_id = m.id
@@ -683,6 +707,7 @@ export class AiManager {
     return rows.map((r) => ({
       id: toNumber(r.id),
       libraryId: toNumber(r.library_id),
+      folderPath: String(r.folder_path ?? ''),
       filename: String(r.filename),
       rootPath: String(r.root_path),
       rootIdentity: r.root_identity == null ? null : String(r.root_identity),
@@ -862,6 +887,7 @@ export class AiManager {
         if (st.stopRequested || this.stoppedAll) break;
         st.currentFile = item.filename;
         st.currentFileLibraryId = item.libraryId;
+        st.currentFileFolderPath = item.folderPath;
         this.emitStatus(false);
 
         let source:
@@ -1277,6 +1303,15 @@ export class AiManager {
       LIMIT 4
       `,
     );
+    const validCoverStmt = this.db.prepare(
+      `
+      SELECT 1
+      FROM media_faces mf
+      JOIN media m ON m.id = mf.media_id
+      WHERE mf.id = ? AND mf.person_id = ? AND m.deleted_at IS NULL ${libSql}
+      LIMIT 1
+      `,
+    );
 
     return rows.map((r) => {
       const id = toNumber(r.id);
@@ -1287,13 +1322,13 @@ export class AiManager {
       const sampleIds = samples.map((s) => toNumber(s.id));
       const rawCover =
         r.cover_face_id === null ? null : toNumber(r.cover_face_id);
-      const coverFaceId =
-        rawCover === null
-          ? (sampleIds[0] ?? null)
-          : (Array.isArray(allowedLibraryIds) || privCond.clause) &&
-              !sampleIds.includes(rawCover)
-            ? (sampleIds[0] ?? null)
-            : rawCover;
+      const isCoverVisible =
+        rawCover !== null &&
+        (sampleIds.includes(rawCover) ||
+          Boolean(validCoverStmt.get(rawCover, id, ...scopeParams)));
+      const coverFaceId = isCoverVisible
+        ? rawCover
+        : (sampleIds[0] ?? null);
 
       return {
         id,
